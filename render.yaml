@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: omingle
+    env: node
+    plan: free
+    buildCommand: yarn install --frozen-lockfile && yarn build
+    startCommand: yarn start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: NEXT_PUBLIC_BASE_URL
+        value: https://omingle.fun
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: DB_NAME
+        value: Omingle
+      - key: CORS_ORIGINS
+        value: https://omingle.fun,https://www.omingle.fun,http://localhost:3000,http://127.0.0.1:3000
+      - key: AZURE_TRANSLATOR_KEY
+        sync: false
+      - key: AZURE_TRANSLATOR_ENDPOINT
+        value: https://api.cognitive.microsofttranslator.com/
+      - key: AZURE_TRANSLATOR_REGION
+        value: centralindia
+      - key: AZURE_SPEECH_KEY
+        sync: false
+      - key: AZURE_SPEECH_REGION
+        value: southeastasia
+      - key: AZURE_SPEECH_ENDPOINT
+        value: https://southeastasia.api.cognitive.microsoft.com/

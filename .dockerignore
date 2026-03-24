@@ -1,0 +1,14 @@
+.git
+.github
+.next
+.next-dev
+node_modules
+npm-debug.log
+yarn-error.log
+test_reports
+tests
+memory
+.env
+.env.local
+.env.development
+.env.production
