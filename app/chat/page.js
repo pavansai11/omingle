@@ -1593,7 +1593,7 @@ function ChatPageContent() {
           </div>
         </div>
 
-        <div className="mt-3 flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar text-xs sm:text-sm font-medium text-gray-300">
+        <div className="mt-3 flex items-center gap-1 sm:justify-center sm:gap-2 overflow-x-auto no-scrollbar text-xs sm:text-sm font-medium text-gray-300">
           <button
             onClick={() => switchMode('video')}
             className={`rounded-full px-3 py-1.5 whitespace-nowrap transition-all ${mode === 'video' ? 'bg-white text-gray-900' : 'hover:bg-gray-800'}`}

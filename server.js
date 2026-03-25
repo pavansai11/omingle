@@ -2,6 +2,7 @@ const { createServer } = require('http');
 const { parse } = require('url');
 const next = require('next');
 const socialStore = require('./lib/social-store.cjs');
+const redis = require('./lib/upstash-redis.cjs');
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOST || '0.0.0.0';
@@ -13,6 +14,50 @@ const handle = app.getRequestHandler();
 function generateId() {
   return Math.random().toString(36).substring(2, 12);
 }
+
+function parseCookies(cookieHeader = '') {
+  return cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((acc, part) => {
+      const idx = part.indexOf('=');
+      if (idx === -1) return acc;
+      const key = part.slice(0, idx).trim();
+      const value = decodeURIComponent(part.slice(idx + 1).trim());
+      acc[key] = value;
+      return acc;
+    }, {});
+}
+
+function getAllowedOrigins() {
+  const raw = process.env.CORS_ORIGINS || '';
+  const parsed = raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+  if (parsed.length) return parsed;
+  return [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    process.env.NEXT_PUBLIC_BASE_URL || 'https://omingle.fun',
+  ].filter(Boolean);
+}
+
+function assertProductionConfig() {
+  if (dev) return;
+
+  const missing = [];
+  const hasMongo = !!(process.env.MONGODB_URI || process.env.MONGO_URL || (process.env.MONGO_USERNAME && process.env.MONGO_PASSWORD && process.env.MONGO_HOST));
+
+  if (!hasMongo) missing.push('MongoDB configuration');
+  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+    missing.push('Upstash Redis REST configuration');
+  }
+
+  if (missing.length) {
+    throw new Error(`Missing required production configuration: ${missing.join(', ')}`);
+  }
+}
+
+assertProductionConfig();
 
 app.prepare().then(() => {
   const httpServer = createServer(async (req, res) => {
@@ -26,10 +71,16 @@ app.prepare().then(() => {
     }
   });
 
+  const allowedOrigins = new Set(getAllowedOrigins());
+
   const { Server: SocketServer } = require('socket.io');
   const io = new SocketServer(httpServer, {
     cors: {
-      origin: '*',
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (dev || allowedOrigins.has(origin)) return callback(null, true);
+        return callback(new Error(`Origin not allowed: ${origin}`), false);
+      },
       methods: ['GET', 'POST'],
     },
     transports: ['websocket', 'polling'],
@@ -50,12 +101,28 @@ app.prepare().then(() => {
   // Simple presence count (connected sockets)
   let connectedCount = 0;
 
+  function queueBackground(task, label) {
+    Promise.resolve(task).catch((error) => {
+      console.error(label, error?.message || error);
+    });
+  }
+
   function broadcastStats() {
     io.emit('stats', {
       online: connectedCount,
       queueLength: waitingQueue.length,
       rooms: rooms.size,
     });
+
+    queueBackground(
+      redis.setJson('omingle:stats', {
+        online: connectedCount,
+        queueLength: waitingQueue.length,
+        rooms: rooms.size,
+        updatedAt: new Date().toISOString(),
+      }, 180),
+      '[Redis] Failed to sync stats'
+    );
   }
 
   function getOrCreateReputation(anonUserId) {
@@ -68,6 +135,15 @@ app.prepare().then(() => {
 
   function getRoomPartnerId(room, socketId) {
     return room.user1 === socketId ? room.user2 : room.user1;
+  }
+
+  function requireAuthenticatedUser(socket, actionType = 'auth') {
+    const authUser = socket.data?.authUser || null;
+    if (!authUser?.id) {
+      socket.emit('action-feedback', { type: actionType, status: 'unauthorized' });
+      return null;
+    }
+    return authUser;
   }
 
   function getIdentityId(session) {
@@ -149,6 +225,16 @@ app.prepare().then(() => {
       onlineUsers.set(anonUserId, new Set());
     }
     onlineUsers.get(anonUserId).add(socketId);
+
+    queueBackground(
+      redis.setJson(`omingle:presence:${anonUserId}`, {
+        userId: anonUserId,
+        sockets: [...onlineUsers.get(anonUserId)],
+        online: true,
+        updatedAt: new Date().toISOString(),
+      }, 180),
+      '[Redis] Failed to sync presence add'
+    );
   }
 
   function removeOnlineSocket(anonUserId, socketId) {
@@ -158,6 +244,18 @@ app.prepare().then(() => {
     if (sockets.size === 0) {
       onlineUsers.delete(anonUserId);
     }
+
+    queueBackground(
+      sockets.size === 0
+        ? redis.delKey(`omingle:presence:${anonUserId}`)
+        : redis.setJson(`omingle:presence:${anonUserId}`, {
+            userId: anonUserId,
+            sockets: [...sockets],
+            online: true,
+            updatedAt: new Date().toISOString(),
+          }, 180),
+      '[Redis] Failed to sync presence remove'
+    );
   }
 
   function isUserOnline(anonUserId) {
@@ -241,6 +339,43 @@ app.prepare().then(() => {
     }
   }
 
+  function syncQueueSnapshot() {
+    const snapshot = waitingQueue.map((entry) => ({
+      socketId: entry.socketId,
+      identityId: getIdentityId(entry),
+      mode: entry.mode,
+      joinedAt: entry.joinedAt,
+    }));
+
+    queueBackground(
+      redis.setJson('omingle:queue', snapshot, 180),
+      '[Redis] Failed to sync queue snapshot'
+    );
+  }
+
+  function syncRoomSnapshot(roomId) {
+    const room = rooms.get(roomId);
+    if (!room) {
+      queueBackground(redis.delKey(`omingle:room:${roomId}`), '[Redis] Failed to delete room snapshot');
+      return;
+    }
+
+    const user1Session = userSessions.get(room.user1);
+    const user2Session = userSessions.get(room.user2);
+    queueBackground(
+      redis.setJson(`omingle:room:${roomId}`, {
+        roomId,
+        user1SocketId: room.user1,
+        user2SocketId: room.user2,
+        user1Id: getIdentityId(user1Session),
+        user2Id: getIdentityId(user2Session),
+        mode: room.mode,
+        startedAt: room.startedAt,
+      }, 180),
+      '[Redis] Failed to sync room snapshot'
+    );
+  }
+
   async function notifyFriendsOnlineStatusChanged(identityId) {
     if (!identityId) return;
     const friends = await socialStore.listFriends(identityId);
@@ -314,6 +449,8 @@ app.prepare().then(() => {
       console.error('[History] Failed to persist match history:', error?.message || error);
     });
 
+    syncRoomSnapshot(roomId);
+
     return roomId;
   }
 
@@ -338,6 +475,7 @@ app.prepare().then(() => {
       if (partnerSession) partnerSession.roomId = null;
       rooms.delete(roomId);
       roomActions.delete(roomId);
+      syncRoomSnapshot(roomId);
     }
     session.roomId = null;
   }
@@ -345,7 +483,21 @@ app.prepare().then(() => {
   function removeFromQueue(socketId) {
     const idx = waitingQueue.findIndex(u => u.socketId === socketId);
     if (idx !== -1) waitingQueue.splice(idx, 1);
+    syncQueueSnapshot();
   }
+
+  io.use(async (socket, next) => {
+    try {
+      const cookies = parseCookies(socket.handshake.headers.cookie || '');
+      const sessionId = cookies.omingle_session;
+      socket.data.authUser = await socialStore.getUserBySessionId(sessionId);
+      return next();
+    } catch (error) {
+      console.error('[SocketAuth] Failed to resolve authenticated session:', error?.message || error);
+      socket.data.authUser = null;
+      return next();
+    }
+  });
 
   io.on('connection', (socket) => {
     console.log('[Socket] Connected:', socket.id);
@@ -361,15 +513,16 @@ app.prepare().then(() => {
     socket.on('identify-user', async (data = {}) => {
       const existing = userSessions.get(socket.id) || { socketId: socket.id, spokenLanguages: [], roomId: null }
       const previousIdentityId = getIdentityId(existing)
+      const authUser = socket.data?.authUser || null
 
       const session = {
         ...existing,
         socketId: socket.id,
         anonUserId: data.anonUserId || existing.anonUserId || `guest_${socket.id}`,
-        userId: data.userId || existing.userId || null,
-        displayName: data.displayName || existing.displayName || null,
-        email: data.email || existing.email || '',
-        image: data.image || existing.image || null,
+        userId: authUser?.id || existing.userId || null,
+        displayName: authUser?.name || existing.displayName || null,
+        email: authUser?.email || existing.email || '',
+        image: authUser?.image || existing.image || null,
         country: data.country?.countryName ? data.country : existing.country || null,
         joinedAt: existing.joinedAt || new Date(),
       }
@@ -388,7 +541,7 @@ app.prepare().then(() => {
 
       const storedProfile = {
         userId: identityId,
-        name: session.displayName || `User ${String(identityId || '').slice(-4)}`,
+        name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
         email: session.email || '',
         image: session.image || null,
         countryName: session.country?.countryName || 'Unknown',
@@ -404,6 +557,7 @@ app.prepare().then(() => {
     socket.on('join-queue', async (data) => {
       const { primaryLanguage, spokenLanguages, mode, anonUserId, country, userId, displayName, email, image } = data;
       console.log('[Socket] join-queue:', socket.id, mode, primaryLanguage?.code);
+      const authUser = socket.data?.authUser || null
 
       // Clean up any existing room
       leaveRoom(socket);
@@ -415,10 +569,10 @@ app.prepare().then(() => {
         spokenLanguages: spokenLanguages || [],
         mode: mode || 'video',
         anonUserId: anonUserId || `guest_${socket.id}`,
-        userId: userId || null,
-        displayName: displayName || null,
-        email: email || '',
-        image: image || null,
+        userId: authUser?.id || null,
+        displayName: authUser?.name || null,
+        email: authUser?.email || '',
+        image: authUser?.image || null,
         country: country?.countryName ? country : deriveCountry(primaryLanguage),
         roomId: null,
         joinedAt: new Date(),
@@ -429,7 +583,7 @@ app.prepare().then(() => {
       addOnlineSocket(identityId, socket.id);
       const storedProfile = {
         userId: identityId,
-        name: session.displayName || `User ${String(identityId || '').slice(-4)}`,
+        name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
         email: session.email || '',
         image: session.image || null,
         countryName: session.country?.countryName || 'Unknown',
@@ -460,6 +614,7 @@ app.prepare().then(() => {
         broadcastStats();
       } else {
         waitingQueue.push(session);
+        syncQueueSnapshot();
         socket.emit('queue-status', {
           position: waitingQueue.length,
           queueLength: waitingQueue.length,
@@ -489,7 +644,16 @@ app.prepare().then(() => {
       }
     });
 
-    socket.on('send-message', (data) => {
+    socket.on('send-message', async (data) => {
+      try {
+        const allowed = await redis.checkRateLimit(`omingle:rate:message:${socket.id}`, 40, 15);
+        if (!allowed) {
+          socket.emit('action-feedback', { type: 'message', status: 'rate-limited' });
+          return;
+        }
+      } catch (error) {
+        console.error('[Redis] Message rate-limit warning', error?.message || error);
+      }
       console.log('[Socket] send-message received:', socket.id, data);
       const session = userSessions.get(socket.id);
       if (!session || !session.roomId) {
@@ -514,6 +678,8 @@ app.prepare().then(() => {
     socket.on('update-profile', async (data = {}) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
+      const authUser = requireAuthenticatedUser(socket, 'profile');
+      if (!authUser) return;
 
       const identityId = getIdentityId(session);
       const nextName = typeof data?.name === 'string' ? data.name.trim() : '';
@@ -529,6 +695,11 @@ app.prepare().then(() => {
         image: session.image || null,
         countryName: session.country?.countryName || 'Unknown',
         countryFlag: session.country?.countryFlag || '🌐',
+      };
+
+      socket.data.authUser = {
+        ...authUser,
+        name: nextName,
       };
 
       userProfiles.set(identityId, nextProfile);
@@ -621,6 +792,7 @@ app.prepare().then(() => {
     socket.on('send-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
+      if (!requireAuthenticatedUser(socket, 'friend-request')) return;
 
       const requesterId = getIdentityId(session);
       let recipientId = data?.targetUserId || null;
@@ -635,6 +807,15 @@ app.prepare().then(() => {
       }
 
       if (!requesterId || !recipientId) return;
+
+      const allowed = await redis.checkRateLimit(`omingle:rate:friend-request:${requesterId}`, 10, 60).catch((error) => {
+        console.error('[Redis] Friend request rate-limit failed:', error?.message || error);
+        return true;
+      });
+      if (!allowed) {
+        socket.emit('action-feedback', { type: 'friend-request', status: 'rate-limited' });
+        return;
+      }
 
       const result = await socialStore.createFriendRequest({ requesterId, recipientId });
 
@@ -656,6 +837,7 @@ app.prepare().then(() => {
     socket.on('accept-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
+      if (!requireAuthenticatedUser(socket, 'friend-request-accept')) return;
       const myUserId = getIdentityId(session);
       const result = await socialStore.acceptFriendRequest({ requestId: data.requestId, userId: myUserId });
       if (result.status !== 'accepted') {
@@ -674,6 +856,7 @@ app.prepare().then(() => {
     socket.on('reject-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
+      if (!requireAuthenticatedUser(socket, 'friend-request-reject')) return;
       const myUserId = getIdentityId(session);
       const result = await socialStore.rejectFriendRequest({ requestId: data.requestId, userId: myUserId });
       if (result.status !== 'rejected') {
@@ -689,6 +872,7 @@ app.prepare().then(() => {
       const friendAnonId = data?.friendAnonId;
       const session = userSessions.get(socket.id);
       if (!session || !friendAnonId) return;
+      if (!requireAuthenticatedUser(socket, 'friend-connect')) return;
 
       const myAnon = getIdentityId(session);
       const myFriends = await socialStore.listFriends(myAnon);
