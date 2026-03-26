@@ -1,4 +1,4 @@
-# Omingle deployment on Hostinger VPS
+# HappiChat deployment on Hostinger VPS
 
 This app uses a custom `server.js` + Socket.IO, so it should be hosted on a **Hostinger VPS**.
 Shared hosting is not suitable for this setup.
@@ -31,8 +31,8 @@ npm install -g pm2 yarn
 ```bash
 mkdir -p /var/www
 cd /var/www
-git clone https://github.com/YOUR_GITHUB_USERNAME/Omingle.git omingle
-cd /var/www/omingle
+git clone https://github.com/YOUR_GITHUB_USERNAME/HappiChat.git happichat
+cd /var/www/happichat
 ```
 
 ## 5. Configure environment variables
@@ -46,18 +46,18 @@ nano .env
 
 At minimum, set:
 
-- `NEXT_PUBLIC_BASE_URL=https://omingle.fun`
+- `NEXT_PUBLIC_BASE_URL=https://happichat.com`
 - `NEXT_PUBLIC_GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `MONGODB_URI` *(recommended)*
 - Azure translator/speech keys
-- `CORS_ORIGINS=https://omingle.fun,https://www.omingle.fun`
+- `CORS_ORIGINS=https://happichat.com,https://www.happichat.com`
 
 ## 6. Build and start with PM2
 
 ```bash
-cd /var/www/omingle
+cd /var/www/happichat
 yarn install --frozen-lockfile
 yarn build
 pm2 start ecosystem.config.js --env production
@@ -72,8 +72,8 @@ Run the command printed by `pm2 startup`.
 Copy the provided config:
 
 ```bash
-cp deploy/nginx-omingle.fun.conf /etc/nginx/sites-available/omingle.fun
-ln -s /etc/nginx/sites-available/omingle.fun /etc/nginx/sites-enabled/omingle.fun
+cp deploy/nginx-happichat.com.conf /etc/nginx/sites-available/happichat.com
+ln -s /etc/nginx/sites-available/happichat.com /etc/nginx/sites-enabled/happichat.com
 nginx -t
 systemctl reload nginx
 ```
@@ -81,7 +81,7 @@ systemctl reload nginx
 ## 8. Enable HTTPS
 
 ```bash
-certbot --nginx -d omingle.fun -d www.omingle.fun
+certbot --nginx -d happichat.com -d www.happichat.com
 ```
 
 ## 9. Google OAuth settings
@@ -92,8 +92,8 @@ In **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Clie
 - add **Authorized JavaScript origins**:
   - `http://localhost:3000`
   - `http://127.0.0.1:3000`
-  - `https://omingle.fun`
-  - `https://www.omingle.fun`
+  - `https://happichat.com`
+  - `https://www.happichat.com`
 
 If the OAuth consent screen is still in **Testing**, add your Gmail as a test user.
 
@@ -111,7 +111,7 @@ To enable auto-deploy from GitHub, add these GitHub repo secrets:
 - `HOSTINGER_USER` → SSH username (e.g. `root`)
 - `HOSTINGER_SSH_KEY` → private SSH key
 - `HOSTINGER_PORT` → usually `22`
-- `HOSTINGER_APP_DIR` → `/var/www/omingle`
+- `HOSTINGER_APP_DIR` → `/var/www/happichat`
 
 After that, every push to `main` will:
 
@@ -128,7 +128,7 @@ After that, every push to `main` will:
 - After changing `.env`, rebuild/restart:
 
 ```bash
-cd /var/www/omingle
+cd /var/www/happichat
 yarn build
-pm2 restart omingle
+pm2 restart happichat
 ```

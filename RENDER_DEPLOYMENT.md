@@ -1,4 +1,4 @@
-# Omingle deployment on Render with Hostinger domain
+# HappiChat deployment on Render with Hostinger domain
 
 This is the simplest low-cost deployment path for the current app.
 
@@ -36,7 +36,7 @@ For production, do not rely on the in-memory auth fallback.
 Example:
 
 ```env
-MONGODB_URI=mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net/Omingle?retryWrites=true&w=majority
+MONGODB_URI=mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net/HappiChat?retryWrites=true&w=majority
 ```
 
 ---
@@ -46,11 +46,11 @@ MONGODB_URI=mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net/Omingle?r
 1. Open **https://render.com**
 2. Sign in with GitHub
 3. Click **New +** → **Web Service**
-4. Select your repo: `pavansai11/omingle`
+4. Select your repo: `pavansai11/happichat`
 
 ### Use these settings
 
-- **Name:** `omingle`
+- **Name:** `happichat`
 - **Runtime:** `Node`
 - **Branch:** `main`
 - **Build Command:**
@@ -77,13 +77,13 @@ You can also use the included `render.yaml` blueprint if Render offers the bluep
 In your Render service → **Environment**, add:
 
 ```env
-NEXT_PUBLIC_BASE_URL=https://omingle.fun
+NEXT_PUBLIC_BASE_URL=https://happichat.com
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET=YOUR_GOOGLE_CLIENT_SECRET
 MONGODB_URI=YOUR_MONGODB_URI
-DB_NAME=Omingle
-CORS_ORIGINS=https://omingle.fun,https://www.omingle.fun,http://localhost:3000,http://127.0.0.1:3000
+DB_NAME=HappiChat
+CORS_ORIGINS=https://happichat.com,https://www.happichat.com,http://localhost:3000,http://127.0.0.1:3000
 AZURE_TRANSLATOR_KEY=...
 AZURE_TRANSLATOR_ENDPOINT=https://api.cognitive.microsofttranslator.com/
 AZURE_TRANSLATOR_REGION=centralindia
@@ -103,7 +103,7 @@ After saving env vars, click **Deploy latest commit**.
 Render will build and start the app, then give you a URL like:
 
 ```text
-https://omingle.onrender.com
+https://happichat.onrender.com
 ```
 
 Test this URL before connecting your custom domain.
@@ -122,9 +122,9 @@ Add all origins you use:
 
 - `http://localhost:3000`
 - `http://127.0.0.1:3000`
-- `https://omingle.onrender.com`
-- `https://omingle.fun`
-- `https://www.omingle.fun`
+- `https://happichat.onrender.com`
+- `https://happichat.com`
+- `https://www.happichat.com`
 
 ### OAuth consent screen
 
@@ -141,8 +141,8 @@ Later publish it when ready.
 Go to your service → **Settings** → **Custom Domains**
 
 Add:
-- `omingle.fun`
-- optionally `www.omingle.fun`
+- `happichat.com`
+- optionally `www.happichat.com`
 
 Render will show the DNS records to add.
 
@@ -200,10 +200,10 @@ Also, because matchmaking is in memory:
 3. Create Render Web Service
 4. Add env vars in Render
 5. Deploy and test `onrender.com` URL
-6. Add Render URL + `omingle.fun` to Google OAuth origins
+6. Add Render URL + `happichat.com` to Google OAuth origins
 7. Add custom domain in Render
 8. Add DNS records in Hostinger
-9. Test Google sign-in on `https://omingle.fun`
+9. Test Google sign-in on `https://happichat.com`
 10. Push future updates normally with git
 
 ---

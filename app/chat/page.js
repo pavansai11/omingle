@@ -91,7 +91,11 @@ function ChatPageContent() {
   const [isCameraOff, setIsCameraOff] = useState(false)
   const [partnerLanguage, setPartnerLanguage] = useState(null)
   const [partnerCountry, setPartnerCountry] = useState(null)
-  const [selfCountry, setSelfCountry] = useState(() => deriveCountryFromLanguage(primaryLanguage))
+  const [selfCountry, setSelfCountry] = useState({
+    countryCode: null,
+    countryName: 'Unknown',
+    countryFlag: '🌐',
+  })
   const [partnerId, setPartnerId] = useState(null)
   const [roomId, setRoomId] = useState(null)
   const [callDuration, setCallDuration] = useState(0)
@@ -137,6 +141,7 @@ function ChatPageContent() {
   const [partnerUserId, setPartnerUserId] = useState(null)
   const [partnerProfile, setPartnerProfile] = useState(null)
   const [socketConnected, setSocketConnected] = useState(false)
+  const [hasCameraPermission, setHasCameraPermission] = useState(mode !== 'video')
 
   // Language facts
   const [factIndex, setFactIndex] = useState(0)
@@ -144,10 +149,21 @@ function ChatPageContent() {
   // Presence stats
   const [onlineCount, setOnlineCount] = useState(null)
 
-  const partnerDisplayCountry = useMemo(
-    () => partnerCountry || deriveCountryFromLanguage(partnerLanguage),
-    [partnerCountry, partnerLanguage]
-  )
+  const partnerDisplayCountry = useMemo(() => {
+    if (partnerCountry) return partnerCountry
+    if (partnerProfile?.countryName || partnerProfile?.countryFlag) {
+      return {
+        countryCode: partnerProfile?.countryCode || null,
+        countryName: partnerProfile?.countryName || 'Unknown',
+        countryFlag: partnerProfile?.countryFlag || '🌐',
+      }
+    }
+    return {
+      countryCode: null,
+      countryName: 'Unknown',
+      countryFlag: '🌐',
+    }
+  }, [partnerCountry, partnerProfile])
 
   const sortedFriends = useMemo(() => {
     return [...friends].sort((a, b) => {
@@ -213,6 +229,7 @@ function ChatPageContent() {
   const blurFrameRef = useRef(null)
   const blurSegmentationRef = useRef(null)
   const processedVideoTrackRef = useRef(null)
+  const countrySyncRef = useRef(false)
 
   // Keep refs in sync
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
@@ -267,8 +284,40 @@ function ChatPageContent() {
   }, [])
 
   useEffect(() => {
-    setSelfCountry(prev => prev || deriveCountryFromLanguage(primaryLanguage))
-  }, [primaryLanguage])
+    if (!sessionUser?.id) return
+    if (!selfCountry?.countryName || selfCountry.countryName === 'Unknown') return
+    if (countrySyncRef.current) return
+    if (sessionUser?.countryCode === selfCountry.countryCode && sessionUser?.countryName === selfCountry.countryName && sessionUser?.countryFlag === selfCountry.countryFlag) return
+
+    countrySyncRef.current = true
+    fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        countryCode: selfCountry.countryCode,
+        countryName: selfCountry.countryName,
+        countryFlag: selfCountry.countryFlag,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.user) setSessionUser(data.user)
+      })
+      .catch(() => {})
+      .finally(() => {
+        countrySyncRef.current = false
+      })
+  }, [selfCountry, sessionUser])
+
+  useEffect(() => {
+    if (sessionUser?.countryName || sessionUser?.countryFlag) {
+      setSelfCountry((prev) => ({
+        countryCode: sessionUser?.countryCode || prev.countryCode || null,
+        countryName: sessionUser?.countryName || prev.countryName || 'Unknown',
+        countryFlag: sessionUser?.countryFlag || prev.countryFlag || '🌐',
+      }))
+    }
+  }, [sessionUser])
 
   useEffect(() => {
     let cancelled = false
@@ -776,12 +825,20 @@ function ChatPageContent() {
         }
 
         const constraints = {
-          audio: { echoCancellation: true, noiseSuppression: true },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+          },
           video: mode === 'video' ? { width: 640, height: 480, facingMode: 'user' } : false,
         }
         const stream = await getUserMedia(constraints)
         rawLocalStreamRef.current = stream
         localStreamRef.current = stream
+        setHasCameraPermission(mode !== 'video' || stream.getVideoTracks().length > 0)
 
         if (localVideoRef.current && mode === 'video') {
           await attachLocalPreviewStream(stream)
@@ -798,13 +855,14 @@ function ChatPageContent() {
         console.error('[Media] Error:', err)
         const denied = err?.name === 'NotAllowedError'
         const message = denied
-          ? 'Camera/mic permission denied. You can still use text chat.'
+          ? mode === 'video' ? 'Camera access is required for video chat.' : 'Microphone permission denied. You can still use text chat.'
           : err?.message
             ? `${err.message}`
             : 'Could not access camera/mic. Text chat is still available.'
 
         setMediaWarning(message)
         setIsMediaReady(true)
+        setHasCameraPermission(mode !== 'video')
 
         if (pendingStartRef.current && socketRef.current?.connected) {
           joinQueue()
@@ -826,6 +884,32 @@ function ChatPageContent() {
       }
     }
   }, [mode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const onPopState = () => {
+      if (showChat) {
+        setShowChat(false)
+        setUnreadCount(0)
+        return
+      }
+      if (panelTab) {
+        setPanelTab(null)
+        setMobilePane('video')
+      }
+    }
+
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [panelTab, showChat])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (showChat || panelTab) {
+      window.history.pushState({ omingleOverlay: true, showChat, panelTab }, '', window.location.href)
+    }
+  }, [panelTab, showChat])
 
   // Ensure local preview attaches even if the <video> ref becomes available after getUserMedia resolves
   useEffect(() => {
@@ -1118,7 +1202,7 @@ function ChatPageContent() {
       timestamp: data.timestamp,
       isMine: false,
       translatedText: null,
-      isTranslating: true,
+      isTranslating: false,
     }
     setMessages(prev => [...prev.slice(-MAX_CHAT_MESSAGES + 1), newMsg])
     setIsPartnerTyping(false)
@@ -1127,12 +1211,6 @@ function ChatPageContent() {
       setUnreadCount(c => c + 1)
     }
 
-    // Translate message
-    translateText(data.text, data.fromLang, primaryLanguage.googleCode).then(translated => {
-      setMessages(prev => prev.map(m =>
-        m.id === data.id ? { ...m, translatedText: translated, isTranslating: false } : m
-      ))
-    })
   }
 
   function handleTranslationReady(data) {
@@ -1382,6 +1460,10 @@ function ChatPageContent() {
   }
 
   function handleStartSearch() {
+    if (mode === 'video' && !hasCameraPermission) {
+      setMediaWarning('Camera access is required before you can start video chat.')
+      return
+    }
     pendingStartRef.current = true
     setMobilePane('video')
     resetSessionUi()
@@ -1572,22 +1654,27 @@ function ChatPageContent() {
     <div className="h-[100dvh] min-h-[100dvh] bg-gray-950 flex flex-col overflow-hidden">
       <div className="relative z-30 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between gap-3">
-          <button
-            onClick={() => router.push('/')}
-            className="text-left text-xl sm:text-2xl font-bold tracking-tight text-white"
-          >
-            Omingle
+          <button onClick={() => router.push('/')} className="flex items-center">
+            <img src="/logo.svg" alt="HappiChat" className="h-9 sm:h-10 w-auto" />
           </button>
 
           <div className="flex items-center justify-end gap-2 min-w-[44px]">
             {onlineCount !== null && (
-              <div className="hidden sm:flex rounded-full border border-gray-800/60 bg-gray-900/85 px-3 py-1.5 text-xs text-gray-300">
+              <>
+                <div className="flex rounded-full border border-gray-800/60 bg-gray-900/85 px-2.5 py-1 text-[11px] text-gray-300 sm:hidden">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <span className="w-2 h-2 rounded-full bg-green-400" />
+                    {formatOnlineCount(onlineCount)}
+                  </span>
+                </div>
+                <div className="hidden sm:flex rounded-full border border-gray-800/60 bg-gray-900/85 px-3 py-1.5 text-xs text-gray-300">
                 <span className="inline-flex items-center gap-2 whitespace-nowrap">
                   <span className="w-2 h-2 rounded-full bg-green-400" />
                   <Users className="w-3.5 h-3.5 text-gray-400" />
                   Online {formatOnlineCount(onlineCount)}
                 </span>
-              </div>
+                </div>
+              </>
             )}
             <GoogleAuthButton compact onUserChange={setSessionUser} onOpenSettings={() => setSettingsOpen(true)} userOverride={sessionUser} />
           </div>
@@ -1633,6 +1720,12 @@ function ChatPageContent() {
         onSaved={(user) => {
           setSessionUser(user)
           socketRef.current?.emit('update-profile', { name: user?.name })
+          const primary = user?.primaryLanguage || primaryLanguage
+          const additional = Array.isArray(user?.additionalLanguages) ? user.additionalLanguages : additionalLanguages
+          const others = additional.map((lang) => lang.code).filter(Boolean).join(',')
+          if (primary?.code) {
+            router.replace(`/chat?mode=${mode}&lang=${primary.code}${others ? `&others=${others}` : ''}`)
+          }
         }}
       />
 
@@ -2087,7 +2180,6 @@ function ChatPageContent() {
               <div className="text-center text-gray-500 text-sm mt-8">
                 <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
                 <p>Send a message to start chatting!</p>
-                <p className="text-xs mt-1">Messages are auto-translated</p>
               </div>
             )}
             {messages.map((msg) => (
@@ -2096,14 +2188,6 @@ function ChatPageContent() {
                   ? 'bg-violet-600 text-white rounded-br-sm'
                   : 'bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
                   <p className="text-sm">{msg.text}</p>
-                  {msg.translatedText && msg.translatedText !== msg.text && (
-                    <p className={`text-xs mt-1 ${msg.isMine ? 'text-violet-200' : 'text-gray-400'} italic`}>
-                      {msg.translatedText}
-                    </p>
-                  )}
-                  {msg.isTranslating && (
-                    <p className="text-xs mt-1 text-gray-400 italic">Translating...</p>
-                  )}
                   <p className={`text-[10px] mt-1 ${msg.isMine ? 'text-violet-300' : 'text-gray-500'}`}>
                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
@@ -2174,7 +2258,7 @@ function ChatPageContent() {
 
         <button
           onClick={() => { setShowChat(!showChat); setUnreadCount(0) }}
-          className="sm:hidden absolute right-4 -top-14 inline-flex h-11 min-w-[96px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500"
+          className={`${showChat ? 'hidden' : 'sm:hidden absolute right-4 -top-14 inline-flex h-11 min-w-[96px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500'}`}
           aria-label="Toggle chat"
         >
           <MessageSquare className="w-4 h-4" /> Chat

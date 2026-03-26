@@ -95,7 +95,7 @@ export async function GET(request, { params }) {
   const path = pathSegments.join('/');
 
   if (path === '' || path === 'health') {
-    return NextResponse.json({ status: 'ok', message: 'Omingle API running' });
+    return NextResponse.json({ status: 'ok', message: 'HappiChat API running' });
   }
 
   if (path === 'auth/session') {
@@ -122,12 +122,24 @@ export async function POST(request, { params }) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
 
-      const { name } = await request.json();
-      if (!name || typeof name !== 'string' || !name.trim()) {
-        return NextResponse.json({ error: 'Name is required' }, { status: 400 });
+      const { name, primaryLanguage, additionalLanguages, countryCode, countryName, countryFlag } = await request.json();
+      const hasName = typeof name === 'string' && !!name.trim();
+      const hasPrimaryLanguage = !!primaryLanguage;
+      const hasAdditionalLanguages = Array.isArray(additionalLanguages);
+      const hasCountry = typeof countryName === 'string' || typeof countryFlag === 'string' || typeof countryCode === 'string';
+
+      if (!hasName && !hasPrimaryLanguage && !hasAdditionalLanguages && !hasCountry) {
+        return NextResponse.json({ error: 'At least one profile field is required' }, { status: 400 });
       }
 
-      const user = await updateUserProfile(session.user.id, { name });
+      const user = await updateUserProfile(session.user.id, {
+        name,
+        primaryLanguage,
+        additionalLanguages,
+        countryCode,
+        countryName,
+        countryFlag,
+      });
       return NextResponse.json({ user });
     } catch (error) {
       console.error('[Profile] Update failed:', error);

@@ -1,15 +1,25 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Loader2, X } from 'lucide-react'
+import { ALL_LANGUAGES } from '@/lib/languages'
 
 export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
   const [name, setName] = useState(user?.name || '')
+  const [primaryLanguageCode, setPrimaryLanguageCode] = useState(user?.primaryLanguage?.code || 'en-US')
+  const [additionalLanguageCodes, setAdditionalLanguageCodes] = useState(user?.additionalLanguages?.map(lang => lang.code) || [])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
+  const availableAdditionalLanguages = useMemo(
+    () => ALL_LANGUAGES.filter((lang) => lang.code !== primaryLanguageCode),
+    [primaryLanguageCode]
+  )
+
   useEffect(() => {
     setName(user?.name || '')
+    setPrimaryLanguageCode(user?.primaryLanguage?.code || 'en-US')
+    setAdditionalLanguageCodes(user?.additionalLanguages?.map(lang => lang.code) || [])
     setError(null)
   }, [user])
 
@@ -22,13 +32,25 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
       return
     }
 
+    const primaryLanguage = ALL_LANGUAGES.find((lang) => lang.code === primaryLanguageCode)
+    if (!primaryLanguage) {
+      setError('Please choose a primary language')
+      return
+    }
+
+    const additionalLanguages = ALL_LANGUAGES.filter((lang) => additionalLanguageCodes.includes(lang.code) && lang.code !== primaryLanguage.code)
+
     setSaving(true)
     setError(null)
     try {
       const res = await fetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({
+          name: trimmed,
+          primaryLanguage,
+          additionalLanguages,
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -64,7 +86,9 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
             )}
             <div>
               <p className="text-sm font-medium text-white">{user?.email || 'Signed in user'}</p>
-              <p className="text-xs text-gray-500">Visible in history and friend requests</p>
+              <p className="text-xs text-gray-500">
+                {user?.countryFlag || '🌐'} {user?.countryName || 'Country updating from your network'}
+              </p>
             </div>
           </div>
 
@@ -77,6 +101,53 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
               className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50"
               placeholder="Enter your name"
             />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Primary language</label>
+            <select
+              value={primaryLanguageCode}
+              onChange={(e) => {
+                const nextCode = e.target.value
+                setPrimaryLanguageCode(nextCode)
+                setAdditionalLanguageCodes((prev) => prev.filter((code) => code !== nextCode))
+              }}
+              className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+            >
+              {ALL_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  {lang.flag} {lang.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-300">Other languages</label>
+            <div className="max-h-40 overflow-y-auto rounded-xl border border-gray-800 bg-gray-800/40 p-2">
+              <div className="flex flex-wrap gap-2">
+                {availableAdditionalLanguages.map((lang) => {
+                  const active = additionalLanguageCodes.includes(lang.code)
+                  return (
+                    <button
+                      key={lang.code}
+                      type="button"
+                      onClick={() => {
+                        setAdditionalLanguageCodes((prev) => (
+                          active ? prev.filter((code) => code !== lang.code) : [...prev, lang.code].slice(0, 5)
+                        ))
+                      }}
+                      className={`rounded-full border px-3 py-1.5 text-xs transition-all ${active
+                        ? 'border-violet-500/50 bg-violet-600/20 text-violet-200'
+                        : 'border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-700'}`}
+                    >
+                      {lang.flag} {lang.name}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-gray-500">Select up to 5 additional languages.</p>
           </div>
 
           {error && <p className="text-sm text-amber-300">{error}</p>}

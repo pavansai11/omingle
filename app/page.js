@@ -3,8 +3,8 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
-import { ALL_LANGUAGES, INDIAN_LANGUAGES, INTERNATIONAL_LANGUAGES } from '@/lib/languages'
-import { Mic, Video, MessageSquare, Globe, Shield, ArrowRight, X, Search, Check, Languages, Sparkles, Loader2 } from 'lucide-react'
+import { ALL_LANGUAGES, INDIAN_LANGUAGES, INTERNATIONAL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
+import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Search, Check, Languages, Sparkles, Loader2 } from 'lucide-react'
 
 const HERO_PHRASES = [
   { text: 'Meet strangers', lang: 'Live worldwide' },
@@ -26,6 +26,15 @@ export default function HomePage() {
   const [additionalLanguages, setAdditionalLanguages] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [phraseIndex, setPhraseIndex] = useState(0)
+  const [setupSaving, setSetupSaving] = useState(false)
+  const [setupError, setSetupError] = useState(null)
+
+  const buildChatUrlForUser = useCallback((mode = 'video', user = sessionUser) => {
+    const primary = user?.primaryLanguage || getLanguageByCode('en-US') || ALL_LANGUAGES[0]
+    const additional = Array.isArray(user?.additionalLanguages) ? user.additionalLanguages : []
+    const others = additional.map((lang) => lang.code).filter(Boolean).join(',')
+    return `/chat?mode=${mode}&lang=${primary.code}${others ? `&others=${others}` : ''}`
+  }, [sessionUser])
 
   // Rotate phrases
   useEffect(() => {
@@ -74,6 +83,24 @@ export default function HomePage() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!sessionLoading && sessionUser?.profileCompleted) {
+      router.replace(buildChatUrlForUser('video', sessionUser))
+    }
+  }, [buildChatUrlForUser, router, sessionLoading, sessionUser])
+
+  useEffect(() => {
+    if (!sessionLoading && sessionUser && !sessionUser.profileCompleted) {
+      setStep('setup')
+      if (sessionUser.primaryLanguage) {
+        setPrimaryLanguage(sessionUser.primaryLanguage)
+      }
+      if (Array.isArray(sessionUser.additionalLanguages)) {
+        setAdditionalLanguages(sessionUser.additionalLanguages)
+      }
+    }
+  }, [sessionLoading, sessionUser])
+
   const allConsented = consent.age && consent.terms && consent.monitoring
 
   const filteredLanguages = useMemo(() => {
@@ -105,10 +132,8 @@ export default function HomePage() {
   }, [])
 
   const proceedToChat = useCallback((mode) => {
-    if (!primaryLanguage) return
-    const others = additionalLanguages.map(l => l.code).join(',')
-    router.push(`/chat?mode=${mode}&lang=${primaryLanguage.code}${others ? `&others=${others}` : ''}`)
-  }, [primaryLanguage, additionalLanguages, router])
+    router.push(buildChatUrlForUser(mode))
+  }, [buildChatUrlForUser, router])
 
   const ensureAuthenticated = useCallback((action) => {
     if (sessionUser) return true
@@ -118,10 +143,10 @@ export default function HomePage() {
   }, [sessionUser])
 
   const handleStartChat = useCallback((mode) => {
-    if (!primaryLanguage) return
+    if (!sessionUser?.profileCompleted && !primaryLanguage) return
     if (!ensureAuthenticated({ type: 'chat', mode })) return
     proceedToChat(mode)
-  }, [ensureAuthenticated, primaryLanguage, proceedToChat])
+  }, [ensureAuthenticated, primaryLanguage, proceedToChat, sessionUser?.profileCompleted])
 
   useEffect(() => {
     if (!sessionUser || !pendingAction) return
@@ -131,7 +156,11 @@ export default function HomePage() {
     setShowAuthGate(false)
 
     if (action.type === 'start-flow') {
-      setStep('consent')
+      if (sessionUser?.profileCompleted) {
+        proceedToChat('video')
+      } else {
+        setStep('consent')
+      }
       return
     }
 
@@ -139,6 +168,49 @@ export default function HomePage() {
       proceedToChat(action.mode)
     }
   }, [pendingAction, proceedToChat, sessionUser])
+
+  async function handleContinueFromSetup() {
+    if (!sessionUser?.id || !primaryLanguage) {
+      setSetupError('Please choose a primary language to continue')
+      return
+    }
+
+    setSetupSaving(true)
+    setSetupError(null)
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: sessionUser.name,
+          primaryLanguage,
+          additionalLanguages,
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to save your profile')
+      }
+
+      setSessionUser(data.user)
+      setStep('mode')
+    } catch (error) {
+      setSetupError(error?.message || 'Failed to save your profile')
+    } finally {
+      setSetupSaving(false)
+    }
+  }
+
+  if (sessionLoading || sessionUser?.profileCompleted) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+        <div className="inline-flex items-center gap-3 rounded-full border border-gray-800 bg-gray-900/80 px-4 py-3 text-sm text-gray-300">
+          <Loader2 className="w-4 h-4 animate-spin" /> Redirecting to chat...
+        </div>
+      </div>
+    )
+  }
 
   const renderAuthGate = () => {
     if (!showAuthGate) return null
@@ -177,12 +249,9 @@ export default function HomePage() {
         <div className="relative z-10">
           {/* Nav */}
           <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center">
-                <Globe className="w-5 h-5 text-white" />
-              </div>
-              <span className="text-xl font-bold">Omingle</span>
-            </div>
+            <button onClick={() => router.push('/')} className="flex items-center">
+              <img src="/logo.svg" alt="HappiChat" className="h-10 sm:h-11 w-auto" />
+            </button>
             {sessionLoading ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs text-gray-300">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading
@@ -208,7 +277,7 @@ export default function HomePage() {
             </h1>
 
             <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mb-12">
-              Omingle makes random video and voice chat simple.
+              HappiChat makes random video and voice chat simple.
               Meet strangers worldwide, skip quickly, add friends, and reconnect later.
             </p>
 
@@ -293,7 +362,7 @@ export default function HomePage() {
           </div>
 
           <p className="text-sm text-gray-400 mb-6">
-            Omingle connects you with random strangers. Please review our guidelines:
+            HappiChat connects you with random strangers. Please review our guidelines:
           </p>
 
           <div className="space-y-4 mb-6">
@@ -478,11 +547,15 @@ export default function HomePage() {
           )}
 
           {/* Continue to mode selection */}
+          {setupError && <p className="mt-3 text-sm text-amber-300">{setupError}</p>}
+
           {primaryLanguage && (
             <button
-              onClick={() => setStep('mode')}
-              className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+              onClick={handleContinueFromSetup}
+              disabled={setupSaving}
+              className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 rounded-xl font-semibold transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-70"
             >
+              {setupSaving && <Loader2 className="w-4 h-4 animate-spin" />}
               Continue <ArrowRight className="w-4 h-4" />
             </button>
           )}
@@ -516,7 +589,7 @@ export default function HomePage() {
                 <Video className="w-7 h-7 text-violet-400" />
               </div>
               <h3 className="text-lg font-bold mb-2">Video Chat</h3>
-              <p className="text-sm text-gray-400 mb-4">See and hear your match instantly with the default Omingle experience</p>
+              <p className="text-sm text-gray-400 mb-4">See and hear your match instantly with the default HappiChat experience</p>
               <div className="flex items-center gap-1.5 text-xs text-violet-400">
                 <MessageSquare className="w-3.5 h-3.5" /> Text chat always available
               </div>

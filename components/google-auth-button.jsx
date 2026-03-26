@@ -178,7 +178,7 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
         {menuOpen && (
           <div className="absolute right-0 top-full mt-2 w-52 overflow-hidden rounded-2xl border border-gray-800 bg-gray-900 shadow-2xl z-[90]">
             <div className="border-b border-gray-800 px-4 py-3">
-              <p className="truncate text-sm font-medium text-white">{user.name || 'Omingle User'}</p>
+              <p className="truncate text-sm font-medium text-white">{user.name || 'HappiChat User'}</p>
               <p className="truncate text-xs text-gray-500">{user.email}</p>
             </div>
             {onOpenSettings && (

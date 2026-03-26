@@ -1,11 +1,11 @@
 import './globals.css'
 
 export const metadata = {
-  title: 'Omingle — Talk to Anyone, In Any Language',
-  description: 'Random video & voice chat with real-time translation. Connect with strangers worldwide — no common language needed.',
+  title: 'HappiChat — Random Video & Voice Chat',
+  description: 'Random video and voice chat. Meet strangers worldwide, add friends, and reconnect later on HappiChat.',
   openGraph: {
-    title: 'Omingle — Talk to Anyone, In Any Language',
-    description: 'Random video & voice chat with real-time translation.',
+    title: 'HappiChat — Random Video & Voice Chat',
+    description: 'Random video and voice chat with friends, history, and reconnects on HappiChat.',
     type: 'website',
   },
 }
