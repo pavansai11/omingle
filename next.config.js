@@ -1,6 +1,6 @@
 const isDev = process.env.NODE_ENV !== 'production';
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
-const primaryOrigin = allowedOrigins[0] || (isDev ? '*' : (process.env.NEXT_PUBLIC_BASE_URL || 'https://happichat.com'))
+const primaryOrigin = allowedOrigins[0] || (isDev ? '*' : (process.env.NEXT_PUBLIC_BASE_URL || 'https://hippichat.com'))
 
 const nextConfig = {
   output: 'standalone',

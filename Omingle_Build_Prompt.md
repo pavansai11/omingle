@@ -1,4 +1,4 @@
-# HappiChat — Complete AI Build Prompt
+# HippiChat — Complete AI Build Prompt
 ### Full-Stack Random Video/Voice Chat App with Real-Time Translation
 **Use this file in Cursor AI, Claude Code, or any AI coding tool. Feed each PHASE as a separate prompt.**
 
@@ -7,7 +7,7 @@
 ## MASTER CONTEXT (paste this at the top of EVERY prompt)
 
 ```
-I am building "HappiChat" — a random stranger video/voice chat web app where users who speak different languages are automatically matched and their speech is translated in real-time as live captions. Think Omegle but with real-time cross-language translation subtitles.
+I am building "HippiChat" — a random stranger video/voice chat web app where users who speak different languages are automatically matched and their speech is translated in real-time as live captions. Think Omegle but with real-time cross-language translation subtitles.
 
 TECH STACK (do not deviate):
 - Frontend: Next.js 14 (App Router) + TypeScript + Tailwind CSS
@@ -43,11 +43,11 @@ CORE RULES:
 ## PHASE 1 — Project Scaffolding & Folder Structure
 
 ```
-Using the MASTER CONTEXT above, scaffold the complete HappiChat project.
+Using the MASTER CONTEXT above, scaffold the complete HippiChat project.
 
 Create the following exact folder structure:
 
-HappiChat/
+HippiChat/
 ├── apps/
 │   ├── web/                          ← Next.js 14 frontend (Vercel)
 │   │   ├── app/
@@ -715,14 +715,14 @@ BHASHINI_USER_ID=your_bhashini_user_id_here
 GOOGLE_TRANSLATE_API_KEY=your_google_api_key_here
 
 # MongoDB Atlas (free M0 cluster)
-MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/HappiChat
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/HippiChat
 
 # Upstash Redis (free tier)
 REDIS_URL=redis://default:password@host.upstash.io:port
 
 # TURN Server (your Coturn on Hetzner)
 NEXT_PUBLIC_TURN_URL=turn:YOUR_HETZNER_IP:3478
-NEXT_PUBLIC_TURN_USERNAME=HappiChat
+NEXT_PUBLIC_TURN_USERNAME=HippiChat
 NEXT_PUBLIC_TURN_CREDENTIAL=your_turn_password
 
 # Ads
@@ -740,14 +740,14 @@ NODE_ENV=production
 FILE: apps/server/.env.example
 PORT=3001
 FRONTEND_URL=https://yourdomain.com
-MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/HappiChat
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/HippiChat
 REDIS_URL=redis://default:password@host.upstash.io:port
 NODE_ENV=production
 
 FILE: apps/server/ecosystem.config.js (PM2 config for Hetzner)
 module.exports = {
   apps: [{
-    name: 'HappiChat-server',
+    name: 'HippiChat-server',
     script: 'dist/index.js',
     instances: 2,
     exec_mode: 'cluster',
@@ -790,10 +790,10 @@ tls-listening-port=5349
 listening-ip=YOUR_SERVER_IP
 external-ip=YOUR_SERVER_IP
 relay-ip=YOUR_SERVER_IP
-realm=HappiChat.app
-server-name=HappiChat.app
+realm=HippiChat.app
+server-name=HippiChat.app
 lt-cred-mech
-user=HappiChat:YOUR_PASSWORD
+user=HippiChat:YOUR_PASSWORD
 fingerprint
 no-loopback-peers
 no-multicast-peers
@@ -892,7 +892,7 @@ Test locally:
 When you're ready to add games, use this as your next prompt:
 
 ```
-Add a "Play a game while chatting" feature to HappiChat.
+Add a "Play a game while chatting" feature to HippiChat.
 Games: Tic-Tac-Toe and a word guessing game (Skribbl-like).
 Both players must agree before a game starts (via a "Want to play?" invite).
 Games run over the existing Socket.io connection — no new server needed.

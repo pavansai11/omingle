@@ -95,7 +95,7 @@ export async function GET(request, { params }) {
   const path = pathSegments.join('/');
 
   if (path === '' || path === 'health') {
-    return NextResponse.json({ status: 'ok', message: 'HappiChat API running' });
+    return NextResponse.json({ status: 'ok', message: 'HippiChat API running' });
   }
 
   if (path === 'auth/session') {

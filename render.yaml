@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: happichat
+    name: hippichat
     env: node
     plan: free
     buildCommand: yarn install --frozen-lockfile && yarn build
@@ -12,7 +12,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: NEXT_PUBLIC_BASE_URL
-        value: https://happichat.com
+        value: https://hippichat.com
       - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -22,9 +22,9 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: DB_NAME
-        value: HappiChat
+        value: HippiChat
       - key: CORS_ORIGINS
-        value: https://happichat.com,https://www.happichat.com,http://localhost:3000,http://127.0.0.1:3000
+        value: https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000
       - key: AZURE_TRANSLATOR_KEY
         sync: false
       - key: AZURE_TRANSLATOR_ENDPOINT

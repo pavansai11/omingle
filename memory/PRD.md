@@ -1,7 +1,7 @@
-# HappiChat — Random Video/Voice Chat with Real-Time Translation
+# HippiChat — Random Video/Voice Chat with Real-Time Translation
 
 ## Overview
-HappiChat is a random stranger video/voice chat web app where users who speak different languages are matched and their speech is translated in real-time as live captions. Think Omegle but with real-time cross-language translation subtitles.
+HippiChat is a random stranger video/voice chat web app where users who speak different languages are matched and their speech is translated in real-time as live captions. Think Omegle but with real-time cross-language translation subtitles.
 
 ## Tech Stack
 - **Frontend**: Next.js 14 (App Router) + Tailwind CSS + shadcn/ui

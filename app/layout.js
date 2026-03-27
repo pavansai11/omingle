@@ -1,11 +1,11 @@
 import './globals.css'
 
 export const metadata = {
-  title: 'HappiChat — Random Video & Voice Chat',
-  description: 'Random video and voice chat. Meet strangers worldwide, add friends, and reconnect later on HappiChat.',
+  title: 'HippiChat — Random Video & Voice Chat',
+  description: 'Random video and voice chat. Meet strangers worldwide, add friends, and reconnect later on HippiChat.',
   openGraph: {
-    title: 'HappiChat — Random Video & Voice Chat',
-    description: 'Random video and voice chat with friends, history, and reconnects on HappiChat.',
+    title: 'HippiChat — Random Video & Voice Chat',
+    description: 'Random video and voice chat with friends, history, and reconnects on HippiChat.',
     type: 'website',
   },
 }

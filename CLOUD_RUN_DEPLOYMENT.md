@@ -1,4 +1,4 @@
-# HappiChat deployment with Hostinger domain + Google Cloud Run
+# HippiChat deployment with Hostinger domain + Google Cloud Run
 
 This is the recommended low-cost path for the current app:
 
@@ -21,7 +21,7 @@ Push your project to GitHub:
 
 ```bash
 git add .
-git commit -m "Prepare HappiChat for Cloud Run"
+git commit -m "Prepare HippiChat for Cloud Run"
 git push origin main
 ```
 
@@ -63,10 +63,10 @@ Then select your project.
 ## 4. Create an Artifact Registry repository
 
 ```bash
-gcloud artifacts repositories create happichat \
+gcloud artifacts repositories create hippichat \
   --repository-format=docker \
   --location=asia-south1 \
-  --description="HappiChat containers"
+  --description="HippiChat containers"
 ```
 
 You can choose a different region, but keep it consistent everywhere.
@@ -83,7 +83,7 @@ cp .env.production.example .env.production.local
 
 Important values you must finalize:
 
-- `NEXT_PUBLIC_BASE_URL=https://happichat.com`
+- `NEXT_PUBLIC_BASE_URL=https://hippichat.com`
 - `NEXT_PUBLIC_GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_SECRET=...`
@@ -99,10 +99,10 @@ For production, prefer a full **MongoDB Atlas** connection string.
 From the project root:
 
 ```bash
-IMAGE="asia-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/happichat/happichat:initial"
+IMAGE="asia-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/hippichat/hippichat:initial"
 gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 gcloud builds submit --tag "$IMAGE"
-gcloud run deploy happichat \
+gcloud run deploy hippichat \
   --image "$IMAGE" \
   --region asia-south1 \
   --platform managed \
@@ -118,18 +118,18 @@ When prompted, set your environment variables in Cloud Run, or add them later fr
 
 In Google Cloud Console:
 
-**Cloud Run → happichat → Edit & Deploy New Revision → Variables & Secrets**
+**Cloud Run → hippichat → Edit & Deploy New Revision → Variables & Secrets**
 
 Add all production variables from `.env.production.example`.
 
 At minimum:
 
-- `NEXT_PUBLIC_BASE_URL=https://happichat.com`
+- `NEXT_PUBLIC_BASE_URL=https://hippichat.com`
 - `NEXT_PUBLIC_GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_SECRET=...`
 - `MONGODB_URI=...`
-- `CORS_ORIGINS=https://happichat.com,https://www.happichat.com,http://localhost:3000,http://127.0.0.1:3000`
+- `CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000`
 
 Then redeploy.
 
@@ -143,8 +143,8 @@ In Google Cloud Console:
 
 Map:
 
-- `happichat.com`
-- optionally `www.happichat.com`
+- `hippichat.com`
+- optionally `www.hippichat.com`
 
 Google will show DNS records you must add in Hostinger DNS.
 
@@ -171,8 +171,8 @@ Add:
 
 - `http://localhost:3000`
 - `http://127.0.0.1:3000`
-- `https://happichat.com`
-- `https://www.happichat.com`
+- `https://hippichat.com`
+- `https://www.hippichat.com`
 
 Also, while testing the raw Cloud Run URL, you may add the generated:
 
@@ -196,7 +196,7 @@ Add these GitHub repository secrets:
 - `GCP_SA_KEY` → service account JSON key
 - `GCP_PROJECT_ID` → your Google Cloud project ID
 - `GCP_REGION` → e.g. `asia-south1`
-- `GCP_ARTIFACT_REPOSITORY` → e.g. `happichat`
+- `GCP_ARTIFACT_REPOSITORY` → e.g. `hippichat`
 
 Then every push to `main` will:
 
@@ -233,7 +233,7 @@ Then create a JSON key and store it in GitHub secret `GCP_SA_KEY`.
 
 After deployment, test:
 
-1. `https://happichat.com`
+1. `https://hippichat.com`
 2. Google sign-in works
 3. Start Chat asks for sign-in if logged out
 4. Chat page opens correctly
@@ -266,7 +266,7 @@ If you want the simplest path right now:
 2. Enable Cloud Run + Cloud Build + Artifact Registry
 3. Create Artifact Registry repo
 4. Deploy once manually
-5. Connect `happichat.com`
+5. Connect `hippichat.com`
 6. Configure Google OAuth origins
 7. Add GitHub secrets for auto-deploy
 

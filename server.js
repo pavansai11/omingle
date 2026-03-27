@@ -37,7 +37,7 @@ function getAllowedOrigins() {
   return [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    process.env.NEXT_PUBLIC_BASE_URL || 'https://happichat.com',
+    process.env.NEXT_PUBLIC_BASE_URL || 'https://hippichat.com',
   ].filter(Boolean);
 }
 
@@ -971,7 +971,7 @@ app.prepare().then(() => {
   const originalListeners = httpServer.listeners('request').slice();
 
   httpServer.listen(port, hostname, () => {
-    console.log(`> HappiChat ready on http://${hostname}:${port}`);
+    console.log(`> HippiChat ready on http://${hostname}:${port}`);
     console.log(`> Socket.io server attached`);
   });
 });

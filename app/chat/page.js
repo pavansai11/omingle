@@ -1655,7 +1655,7 @@ function ChatPageContent() {
       <div className="relative z-30 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between gap-3">
           <button onClick={() => router.push('/')} className="flex items-center">
-            <img src="/logo.svg" alt="HappiChat" className="h-9 sm:h-10 w-auto" />
+            <img src="/logo.svg" alt="HippiChat" className="h-9 sm:h-10 w-auto" />
           </button>
 
           <div className="flex items-center justify-end gap-2 min-w-[44px]">
