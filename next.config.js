@@ -39,7 +39,7 @@ const nextConfig = {
         source: "/(.*)",
         headers: [
           { key: "X-Frame-Options", value: isDev ? "SAMEORIGIN" : "DENY" },
-          { key: "Content-Security-Policy", value: "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; script-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; frame-ancestors 'self';" },
+          { key: "Content-Security-Policy", value: "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob: https:; connect-src 'self' https: wss:; script-src 'self' 'unsafe-inline' https:; style-src 'self' 'unsafe-inline'; frame-src 'self' https:; child-src 'self' https:; frame-ancestors 'self';" },
           { key: "Access-Control-Allow-Origin", value: primaryOrigin },
           { key: "Access-Control-Allow-Methods", value: "GET, POST, PUT, DELETE, OPTIONS" },
           { key: "Access-Control-Allow-Headers", value: "*" },

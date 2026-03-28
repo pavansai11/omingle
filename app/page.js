@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
+import SponsoredLinkCard from '@/components/sponsored-link-card'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
 const HERO_PHRASES = [
@@ -11,6 +12,8 @@ const HERO_PHRASES = [
   { text: 'Add friends', hint: 'Reconnect later' },
   { text: 'Skip fast', hint: 'Move on instantly' },
 ]
+
+const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 
 export default function HomePage() {
   const router = useRouter()
@@ -208,6 +211,14 @@ export default function HomePage() {
               Google sign-in required • Video + voice chat • Friends and history built in
             </p>
 
+            <SponsoredLinkCard
+              href={DIRECT_LINK_URL}
+              title="Sponsored offer"
+              description="Explore this sponsored link while we keep HippiChat free to use."
+              cta="Learn more"
+              className="mt-10 w-full max-w-2xl"
+            />
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
                 { icon: Video, title: 'Video + Voice', desc: 'Choose between face-to-face video chat or voice-only matching.' },
@@ -315,7 +326,7 @@ export default function HomePage() {
 
           <h2 className="text-2xl font-bold mb-2 text-center">How do you want to chat?</h2>
           <p className="text-gray-400 mb-8 text-center">
-            Language preferences are optional and can be updated later in Settings.
+            Choose how you want to connect. Interests can be adjusted later from Filters.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">

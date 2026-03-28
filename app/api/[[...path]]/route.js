@@ -102,13 +102,14 @@ export async function POST(request, { params }) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
 
-      const { name, primaryLanguage, additionalLanguages, countryCode, countryName, countryFlag } = await request.json();
+      const { name, primaryLanguage, additionalLanguages, customImage, countryCode, countryName, countryFlag } = await request.json();
       const hasName = typeof name === 'string' && !!name.trim();
       const hasPrimaryLanguage = !!primaryLanguage;
       const hasAdditionalLanguages = Array.isArray(additionalLanguages);
+      const hasCustomImage = typeof customImage === 'string';
       const hasCountry = typeof countryName === 'string' || typeof countryFlag === 'string' || typeof countryCode === 'string';
 
-      if (!hasName && !hasPrimaryLanguage && !hasAdditionalLanguages && !hasCountry) {
+      if (!hasName && !hasPrimaryLanguage && !hasAdditionalLanguages && !hasCustomImage && !hasCountry) {
         return NextResponse.json({ error: 'At least one profile field is required' }, { status: 400 });
       }
 
@@ -116,6 +117,7 @@ export async function POST(request, { params }) {
         name,
         primaryLanguage,
         additionalLanguages,
+        customImage,
         countryCode,
         countryName,
         countryFlag,

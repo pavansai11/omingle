@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
+import MonetagAd from '@/components/monetag-ad'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
@@ -27,6 +28,8 @@ const REPORT_REASONS = [
   { value: 'underage', label: 'Appears underage' },
   { value: 'other', label: 'Other' },
 ]
+
+const WAITING_MONETAG_ZONE = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || '10799188'
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -89,6 +92,46 @@ function normalizeInterestKeywords(rawKeywords = []) {
   )].slice(0, MAX_INTEREST_KEYWORDS)
 }
 
+function ControlButtons({
+  primaryActionIsStop,
+  isMediaReady,
+  connectionState,
+  onPrimary,
+  onSkip,
+  onFilters,
+  desktop = false,
+}) {
+  const baseButtonClass = desktop
+    ? 'inline-flex min-w-[150px] items-center justify-center gap-2 rounded-2xl px-5 py-3.5 text-sm font-semibold transition-all'
+    : 'inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap'
+
+  return (
+    <div className={desktop ? 'flex flex-wrap items-center justify-center gap-3' : 'grid grid-cols-3 gap-2 items-center max-w-xl mx-auto'}>
+      <button
+        onClick={onPrimary}
+        disabled={!isMediaReady && !primaryActionIsStop}
+        className={`${baseButtonClass} bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500`}
+      >
+        {primaryActionIsStop ? <Square className={desktop ? 'w-4 h-4' : 'w-3.5 h-3.5'} /> : <Play className={desktop ? 'w-4 h-4' : 'w-3.5 h-3.5'} />}
+        {primaryActionIsStop ? 'Stop' : 'Start'}
+      </button>
+      <button
+        onClick={onSkip}
+        disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+        className={`${baseButtonClass} bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500`}
+      >
+        <SkipForward className={desktop ? 'w-4 h-4' : 'w-3.5 h-3.5'} /> Skip
+      </button>
+      <button
+        onClick={onFilters}
+        className={`${baseButtonClass} bg-amber-400 text-gray-900 hover:bg-amber-300 ${desktop ? '' : ''}`}
+      >
+        <SlidersHorizontal className={desktop ? 'w-4 h-4' : 'w-3.5 h-3.5'} /> Filters
+      </button>
+    </div>
+  )
+}
+
 function ChatPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -136,6 +179,10 @@ function ChatPageContent() {
   const [reportReason, setReportReason] = useState('harassment')
   const [reportDetails, setReportDetails] = useState('')
   const [accountBlockedInfo, setAccountBlockedInfo] = useState(null)
+  const [friendInviteRequest, setFriendInviteRequest] = useState(null)
+  const [pendingInviteRequestId, setPendingInviteRequestId] = useState(null)
+  const [unfriendTarget, setUnfriendTarget] = useState(null)
+  const [unfriendConfirmStep, setUnfriendConfirmStep] = useState(1)
   const [interactionHistory, setInteractionHistory] = useState([])
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] })
   const [sessionUser, setSessionUser] = useState(null)
@@ -173,6 +220,8 @@ function ChatPageContent() {
   const [interestInput, setInterestInput] = useState('')
   const [matchedInterests, setMatchedInterests] = useState([])
   const [turnIceServers, setTurnIceServers] = useState([])
+  const [matchedInterestsVisible, setMatchedInterestsVisible] = useState(false)
+  const [connectionNotice, setConnectionNotice] = useState('')
 
   const partnerDisplayCountry = useMemo(() => {
     if (partnerCountry) return partnerCountry
@@ -255,12 +304,40 @@ function ChatPageContent() {
   const blurSegmentationRef = useRef(null)
   const processedVideoTrackRef = useRef(null)
   const countrySyncRef = useRef(false)
+  const matchedInterestsTimeoutRef = useRef(null)
+  const matchedInterestsHideTimeoutRef = useRef(null)
+  const searchingModeRef = useRef(false)
 
   // Keep refs in sync
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
   useEffect(() => { partnerLanguageRef.current = partnerLanguage }, [partnerLanguage])
   useEffect(() => { primaryLanguageRef.current = primaryLanguage }, [primaryLanguage])
   useEffect(() => { roomIdRef.current = roomId }, [roomId])
+  useEffect(() => { searchingModeRef.current = pendingStartRef.current }, [connectionState])
+
+  useEffect(() => {
+    if (matchedInterestsTimeoutRef.current) clearTimeout(matchedInterestsTimeoutRef.current)
+    if (matchedInterestsHideTimeoutRef.current) clearTimeout(matchedInterestsHideTimeoutRef.current)
+
+    if (!matchedInterests.length) {
+      setMatchedInterestsVisible(false)
+      return undefined
+    }
+
+    setMatchedInterestsVisible(true)
+    matchedInterestsHideTimeoutRef.current = setTimeout(() => {
+      setMatchedInterestsVisible(false)
+    }, 2500)
+    matchedInterestsTimeoutRef.current = setTimeout(() => {
+      setMatchedInterests([])
+      setMatchedInterestsVisible(false)
+    }, 3000)
+
+    return () => {
+      if (matchedInterestsTimeoutRef.current) clearTimeout(matchedInterestsTimeoutRef.current)
+      if (matchedInterestsHideTimeoutRef.current) clearTimeout(matchedInterestsHideTimeoutRef.current)
+    }
+  }, [matchedInterests])
 
   useEffect(() => {
     try {
@@ -413,6 +490,12 @@ function ChatPageContent() {
     actionFeedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 2500)
   }
 
+  function showConnectionNotice(message) {
+    setConnectionNotice(message)
+    if (actionFeedbackTimeoutRef.current) clearTimeout(actionFeedbackTimeoutRef.current)
+    actionFeedbackTimeoutRef.current = setTimeout(() => setConnectionNotice(''), 3500)
+  }
+
   function addInterestKeyword() {
     const nextKeyword = interestInput.trim().toLowerCase()
     if (!nextKeyword) return
@@ -422,6 +505,32 @@ function ChatPageContent() {
 
   function removeInterestKeyword(keywordToRemove) {
     setInterestKeywords((prev) => prev.filter((keyword) => keyword !== keywordToRemove))
+  }
+
+  function openUnfriendConfirmation(friend) {
+    setUnfriendTarget(friend)
+    setUnfriendConfirmStep(1)
+  }
+
+  function closeUnfriendConfirmation() {
+    setUnfriendTarget(null)
+    setUnfriendConfirmStep(1)
+  }
+
+  function handleUnfriend(friend) {
+    const friendUserId = friend?.friendUserId || friend?.friendAnonId
+    if (!socketRef.current || !friendUserId) return
+    socketRef.current.emit('unfriend', { friendUserId })
+    closeUnfriendConfirmation()
+  }
+
+  function respondToFriendInvite(accepted) {
+    if (!socketRef.current || !friendInviteRequest?.inviteId) return
+    socketRef.current.emit('respond-friend-connect', {
+      inviteId: friendInviteRequest.inviteId,
+      accepted,
+    })
+    setFriendInviteRequest(null)
   }
 
   function upsertInteractionHistory(entry) {
@@ -706,15 +815,20 @@ function ChatPageContent() {
         if (destroyed) return
 
         socket = io(window.location.origin, {
-          transports: ['websocket', 'polling'],
-          reconnectionAttempts: 3,
-          timeout: 10000,
+          transports: ['polling', 'websocket'],
+          reconnection: true,
+          reconnectionAttempts: 20,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 8000,
+          timeout: 20000,
         })
         socketRef.current = socket
 
         socket.on('connect', () => {
           console.log('[Socket] Connected:', socket.id)
           setSocketConnected(true)
+          setError(null)
+          setConnectionNotice('')
           socket.emit('get-friends-status')
           if (pendingStartRef.current) {
             joinQueue()
@@ -757,10 +871,22 @@ function ChatPageContent() {
           if (!data?.ok) {
             if (data?.reason === 'offline') showActionFeedback('Friend is offline')
             else if (data?.reason === 'not-friends') showActionFeedback('You are not friends yet')
+            else if (data?.reason === 'declined') showActionFeedback('Friend declined the invite')
+            else if (data?.reason === 'expired') showActionFeedback('Friend invite expired')
             else showActionFeedback('Unable to connect friend right now')
+            setPendingInviteRequestId(null)
             return
           }
+          if (data?.pending) {
+            setPendingInviteRequestId(data.inviteId)
+            showActionFeedback('Invite sent to your friend')
+            return
+          }
+          setPendingInviteRequestId(null)
           showActionFeedback('Connecting to friend...')
+        })
+        socket.on('friend-connect-invite', (data) => {
+          setFriendInviteRequest(data)
         })
         socket.on('partner-likes-updated', (data) => {
           if (typeof data?.likes === 'number') {
@@ -807,6 +933,10 @@ function ChatPageContent() {
           if (data.type === 'friend-request-reject' && data.status === 'ok') {
             showActionFeedback('Friend request rejected')
           }
+
+          if (data.type === 'unfriend' && data.status === 'ok') {
+            showActionFeedback('Friend removed')
+          }
         })
         socket.on('stats', (data) => {
           if (typeof data?.online === 'number') setOnlineCount(data.online)
@@ -838,12 +968,18 @@ function ChatPageContent() {
 
         socket.on('connect_error', (err) => {
           console.error('[Socket] Connection error:', err)
-          setError('Failed to connect to server. Please refresh.')
+          setSocketConnected(false)
+          if (pendingStartRef.current) {
+            showConnectionNotice('Reconnecting to chat...')
+          }
         })
 
-        socket.on('disconnect', () => {
-          console.log('[Socket] Disconnected')
+        socket.on('disconnect', (reason) => {
+          console.log('[Socket] Disconnected', reason)
           setSocketConnected(false)
+          if (pendingStartRef.current && reason !== 'io client disconnect') {
+            showConnectionNotice('Connection lost. Reconnecting...')
+          }
         })
       } catch (err) {
         console.error('[Socket] Init error:', err)
@@ -869,6 +1005,7 @@ function ChatPageContent() {
         socket.off('friend-request-received')
         socket.off('friend-online-status')
         socket.off('friend-connect-result')
+        socket.off('friend-connect-invite')
         socket.off('partner-likes-updated')
         socket.off('received-like')
         socket.off('action-feedback')
@@ -1166,6 +1303,7 @@ function ChatPageContent() {
   // =================== HANDLERS ===================
   function joinQueue() {
     if (!socketRef.current?.connected) return
+    console.log('[Client] joinQueue start', { mode, interests: interestKeywords })
     setConnectionState('waiting')
     setMessages([])
     setPartnerCaption(null)
@@ -1194,10 +1332,23 @@ function ChatPageContent() {
     setPartnerUserId(data.partnerUserId || null)
     setPartnerProfile(data.partnerProfile || null)
     setPartnerLanguage(data.partnerLanguage)
-    setPartnerCountry(data.partnerCountry || deriveCountryFromLanguage(data.partnerLanguage))
+    setPartnerCountry(
+      data.partnerCountry ||
+      (data.partnerProfile?.countryName || data.partnerProfile?.countryFlag
+        ? {
+            countryCode: data.partnerProfile?.countryCode || null,
+            countryName: data.partnerProfile?.countryName || 'Unknown',
+            countryFlag: data.partnerProfile?.countryFlag || '🌐',
+          }
+        : {
+            countryCode: null,
+            countryName: 'Unknown',
+            countryFlag: '🌐',
+          })
+    )
     showCommonLanguages(data.commonLanguages)
     setPartnerLikes(typeof data?.partnerLikes === 'number' ? data.partnerLikes : 0)
-    setMatchedInterests(Array.isArray(data?.matchedInterests) ? data.matchedInterests : [])
+    setMatchedInterests(Array.isArray(data?.matchedInterests) ? data.matchedInterests.slice(0, 3) : [])
     setRoomId(data.roomId)
     setShowFriendsPanel(false)
     setHasAddedFriendForCurrentMatch(false)
@@ -1209,7 +1360,17 @@ function ChatPageContent() {
 
     const historyId = data.roomId || `${data.partnerId}_${Date.now()}`
     currentMatchHistoryIdRef.current = historyId
-    const derivedCountry = data.partnerCountry || deriveCountryFromLanguage(data.partnerLanguage)
+    const derivedCountry = data.partnerCountry || (data.partnerProfile?.countryName || data.partnerProfile?.countryFlag
+      ? {
+          countryCode: data.partnerProfile?.countryCode || null,
+          countryName: data.partnerProfile?.countryName || 'Unknown',
+          countryFlag: data.partnerProfile?.countryFlag || '🌐',
+        }
+      : {
+          countryCode: null,
+          countryName: 'Unknown',
+          countryFlag: '🌐',
+        })
     upsertInteractionHistory({
       id: historyId,
       partnerSocketId: data.partnerId,
@@ -1550,6 +1711,8 @@ function ChatPageContent() {
     setHasReportedPartner(false)
     setActionFeedback(null)
     setReportModalOpen(false)
+    setFriendInviteRequest(null)
+    setPendingInviteRequestId(null)
     setMatchedInterests([])
     setCallDuration(0)
     setUnreadCount(0)
@@ -1821,7 +1984,10 @@ function ChatPageContent() {
         onClose={() => setSettingsOpen(false)}
         onSaved={(user) => {
           setSessionUser(user)
-          socketRef.current?.emit('update-profile', { name: user?.name })
+          socketRef.current?.emit('update-profile', {
+            name: user?.name,
+            customImage: user?.customImage || '',
+          })
           const primary = user?.primaryLanguage || primaryLanguage
           const additional = Array.isArray(user?.additionalLanguages) ? user.additionalLanguages : additionalLanguages
           const others = additional.map((lang) => lang.code).filter(Boolean).join(',')
@@ -1841,14 +2007,6 @@ function ChatPageContent() {
               </button>
             </div>
             <div className="space-y-3 text-sm text-gray-300">
-              <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3">
-                <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Primary language</p>
-                <p>{primaryLanguage?.flag} {primaryLanguage?.name}</p>
-              </div>
-              <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3">
-                <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Mode</p>
-                <p>{mode === 'video' ? 'Video Chat' : 'Voice Chat'}</p>
-              </div>
               <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3">
                 <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Interest keywords</p>
                 <div className="flex gap-2 mb-3">
@@ -1892,7 +2050,7 @@ function ChatPageContent() {
                 )}
               </div>
               <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3 text-gray-400 text-xs">
-                Interest filters apply to your next search and are tuned for low wait times.
+                Filters apply to your next search. Shared interests are preferred, but we still fall back quickly to keep wait times low.
               </div>
             </div>
           </div>
@@ -2007,7 +2165,7 @@ function ChatPageContent() {
         <div className={`flex-1 relative ${showChat ? 'hidden sm:block' : showMobileCenterPane ? 'hidden sm:block' : ''}`}>
           {mode === 'video' ? (
             <div className="flex h-full flex-col gap-3 p-3 sm:p-4 pb-2 sm:pb-4">
-              <div className="grid flex-1 min-h-0 grid-cols-1 gap-3 sm:grid-cols-[1.7fr_0.9fr]">
+              <div className="grid flex-1 min-h-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex min-h-0 flex-col gap-3">
                   <div className="relative w-full rounded-2xl border border-gray-800 bg-gray-900/60 p-2 sm:p-3 overflow-hidden">
                     <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
@@ -2020,7 +2178,7 @@ function ChatPageContent() {
                   <img
                     src="/logo.svg"
                     alt="HippiChat watermark"
-                    className="pointer-events-none absolute bottom-4 right-4 h-9 w-auto select-none opacity-10 grayscale brightness-[2.4]"
+                    className="pointer-events-none absolute bottom-4 right-2 h-9 w-auto select-none opacity-20 grayscale brightness-[2.4]"
                   />
 
                       {connectionState !== 'connected' && (
@@ -2035,8 +2193,16 @@ function ChatPageContent() {
                           <h3 className="text-lg font-semibold text-white">{getRemotePanelTitle()}</h3>
                           <p className="mt-2 max-w-md text-sm text-gray-400">{getRemotePanelSubtitle()}</p>
                           <div className="mt-5 rounded-full border border-gray-800 bg-gray-950/70 px-3 py-1 text-[11px] text-gray-400">
-                            {mode === 'video' ? 'Video chat' : 'Voice chat'} · {primaryLanguage?.name} {primaryLanguage?.flag}
+                            {mode === 'video' ? 'Video chat' : 'Voice chat'} · {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
                           </div>
+                          {connectionState === 'waiting' && (
+                            <MonetagAd
+                              zone={WAITING_MONETAG_ZONE}
+                              label="Sponsored"
+                              className="mt-5 w-full max-w-sm"
+                              minHeightClassName="min-h-[150px]"
+                            />
+                          )}
                           {mediaWarning && (
                             <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 max-w-sm">
                               {mediaWarning}
@@ -2047,37 +2213,6 @@ function ChatPageContent() {
                     </div>
                   </div>
 
-                  {connectionState === 'connected' && (
-                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
-                      <button
-                        onClick={() => handleAddFriend(partnerUserId)}
-                        disabled={!partnerUserId || currentPartnerAlreadyFriend || currentPartnerRequestPending || currentPartnerHasIncomingRequest}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-all ${(currentPartnerAlreadyFriend || currentPartnerRequestPending || currentPartnerHasIncomingRequest)
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                          : 'bg-gray-900/80 text-white border-gray-700 hover:bg-gray-800'} disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        <UserPlus className="w-3.5 h-3.5" /> {currentPartnerAlreadyFriend ? 'Friend Added' : currentPartnerRequestPending ? 'Request Sent' : currentPartnerHasIncomingRequest ? 'Check Requests' : 'Add Friend'}
-                      </button>
-                      <button
-                        onClick={handleLikePartner}
-                        disabled={!partnerId || hasLikedPartner}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-all ${hasLikedPartner
-                          ? 'bg-pink-500/20 text-pink-300 border-pink-500/30'
-                          : 'bg-gray-900/80 text-white border-gray-700 hover:bg-gray-800'} disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        <Heart className={`w-3.5 h-3.5 ${hasLikedPartner ? 'fill-pink-400 text-pink-400' : ''}`} /> Like
-                      </button>
-                      <button
-                        onClick={() => setReportModalOpen(true)}
-                        disabled={!partnerId || hasReportedPartner}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-all ${hasReportedPartner
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                          : 'bg-gray-900/80 text-white border-gray-700 hover:bg-gray-800'} disabled:opacity-50 disabled:cursor-not-allowed`}
-                      >
-                        <Flag className="w-3.5 h-3.5" /> Flag
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 <div className="flex min-h-0 flex-col gap-3">
@@ -2095,7 +2230,7 @@ function ChatPageContent() {
                       <img
                         src="/logo.svg"
                         alt="HippiChat watermark"
-                        className="pointer-events-none absolute bottom-3 right-3 h-7 w-auto select-none opacity-10 grayscale brightness-[2.4]"
+                        className="pointer-events-none absolute bottom-3 right-2 h-7 w-auto select-none opacity-20 grayscale brightness-[2.4]"
                       />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
@@ -2114,10 +2249,31 @@ function ChatPageContent() {
                   </div>
                 </div>
               </div>
+
+              <div className="sm:hidden pt-1">
+                <MonetagAd
+                  zone={WAITING_MONETAG_ZONE}
+                  label="Sponsored"
+                  className="w-full"
+                  minHeightClassName="min-h-[120px]"
+                />
+              </div>
+
+              <div className="hidden sm:flex justify-center pt-1">
+                <ControlButtons
+                  desktop
+                  primaryActionIsStop={primaryActionIsStop}
+                  isMediaReady={isMediaReady}
+                  connectionState={connectionState}
+                  onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+                  onSkip={handleNext}
+                  onFilters={() => setShowPreferences(true)}
+                />
+              </div>
             </div>
           ) : (
             /* Voice mode visualization */
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-950">
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-950 px-4">
               <div className="w-24 h-24 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center mb-4">
                 <Volume2 className="w-10 h-10 text-violet-400" />
               </div>
@@ -2137,6 +2293,25 @@ function ChatPageContent() {
                       animation: connectionState === 'connected' ? `wave ${0.5 + i * 0.1}s ease-in-out infinite alternate` : 'none',
                     }} />
                 ))}
+              </div>
+              {connectionState === 'waiting' && (
+                <MonetagAd
+                  zone={WAITING_MONETAG_ZONE}
+                  label="Sponsored"
+                  className="mt-8 w-full max-w-sm px-4"
+                  minHeightClassName="min-h-[150px]"
+                />
+              )}
+              <div className="hidden sm:flex justify-center mt-8 w-full">
+                <ControlButtons
+                  desktop
+                  primaryActionIsStop={primaryActionIsStop}
+                  isMediaReady={isMediaReady}
+                  connectionState={connectionState}
+                  onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+                  onSkip={handleNext}
+                  onFilters={() => setShowPreferences(true)}
+                />
               </div>
               {/* Hidden audio element for remote stream */}
               <audio ref={remoteVideoRef} autoPlay className="hidden" />
@@ -2158,6 +2333,12 @@ function ChatPageContent() {
             </div>
           )}
 
+          {connectionNotice && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">
+              {connectionNotice}
+            </div>
+          )}
+
           {/* Partner country badge */}
           {partnerDisplayCountry && connectionState === 'connected' && (
             <div className="absolute top-16 left-4 flex items-center gap-2 bg-gray-900/80 backdrop-blur rounded-lg px-3 py-1.5 z-10">
@@ -2170,7 +2351,7 @@ function ChatPageContent() {
           )}
 
           {matchedInterests.length > 0 && connectionState === 'connected' && (
-            <div className="absolute top-28 left-4 z-10 flex flex-wrap gap-2 max-w-[70%]">
+            <div className={`absolute top-28 left-4 z-10 flex flex-wrap gap-2 max-w-[70%] transition-opacity duration-500 ${matchedInterestsVisible ? 'opacity-100' : 'opacity-0'}`}>
               {matchedInterests.map((interest) => (
                 <span key={interest} className="rounded-full border border-violet-400/20 bg-violet-500/15 px-2.5 py-1 text-[11px] text-violet-100 backdrop-blur">
                   #{interest}
@@ -2310,12 +2491,18 @@ function ChatPageContent() {
                           </span>
                           <button
                             onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId)}
-                            disabled={!friend.online}
+                            disabled={!friend.online || !!pendingInviteRequestId}
                             className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500"
                           >
-                            Invite
+                            {pendingInviteRequestId ? 'Pending' : 'Invite'}
                           </button>
                         </div>
+                        <button
+                          onClick={() => openUnfriendConfirmation(friend)}
+                          className="mt-2 rounded-md border border-red-500/20 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/10"
+                        >
+                          Unfriend
+                        </button>
                       </div>
                     ))
                   )}
@@ -2391,6 +2578,69 @@ function ChatPageContent() {
           </div>
         </div>
 
+
+      {friendInviteRequest?.inviteId && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-2">Friend invite</h3>
+            <p className="text-sm text-gray-300 mb-4">
+              {friendInviteRequest.profile?.name || 'Your friend'} wants to connect with you on {friendInviteRequest.mode === 'voice' ? 'voice chat' : 'video chat'}.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => respondToFriendInvite(false)}
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => respondToFriendInvite(true)}
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500"
+              >
+                Accept
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unfriendTarget && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-2">
+              {unfriendConfirmStep === 1 ? 'Remove friend?' : 'Are you absolutely sure?'}
+            </h3>
+            <p className="text-sm text-gray-300 mb-4">
+              {unfriendConfirmStep === 1
+                ? `This will remove ${unfriendTarget.name || 'this friend'} from your friends list.`
+                : 'This action cannot be undone from chat history automatically.'}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={closeUnfriendConfirmation}
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              {unfriendConfirmStep === 1 ? (
+                <button
+                  onClick={() => setUnfriendConfirmStep(2)}
+                  className="rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-400"
+                >
+                  Continue
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleUnfriend(unfriendTarget)}
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
+                >
+                  Unfriend
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
         {/* Text Chat Sidebar */}
         <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col bg-gray-900 border-l border-gray-800`}>
           {/* Chat header */}
@@ -2459,32 +2709,16 @@ function ChatPageContent() {
         </div>
       </div>
 
-      {/* Control Bar */}
-      <div className="relative bg-gray-900 border-t border-gray-800 px-3 sm:px-4 py-4 sm:py-6">
-        <div className="grid grid-cols-3 gap-2 items-center max-w-xl mx-auto">
-          <button
-            onClick={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-            disabled={!isMediaReady && !primaryActionIsStop}
-            className="inline-flex w-full items-center justify-center gap-1 rounded-full bg-gray-800/90 border border-gray-700 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 whitespace-nowrap"
-          >
-            {primaryActionIsStop ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            {primaryActionIsStop ? 'Stop' : 'Start'}
-          </button>
-          <button
-            onClick={handleNext}
-            disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
-            className="inline-flex w-full items-center justify-center gap-1 rounded-full bg-violet-600 px-3 py-2 text-xs font-medium text-white transition-all hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500 whitespace-nowrap"
-          >
-            <SkipForward className="w-3.5 h-3.5" /> Skip
-          </button>
-
-          <button
-            onClick={() => setShowPreferences(true)}
-            className="inline-flex w-full items-center justify-center gap-1 rounded-full bg-amber-400 text-gray-900 px-3 py-2 text-xs font-semibold transition-all hover:bg-amber-300 whitespace-nowrap"
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" /> Filters
-          </button>
-        </div>
+      {/* Mobile Control Bar */}
+      <div className="relative bg-gray-900 border-t border-gray-800 px-3 py-4 sm:hidden">
+        <ControlButtons
+          primaryActionIsStop={primaryActionIsStop}
+          isMediaReady={isMediaReady}
+          connectionState={connectionState}
+          onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+          onSkip={handleNext}
+          onFilters={() => setShowPreferences(true)}
+        />
 
         <button
           onClick={() => { setShowChat(!showChat); setUnreadCount(0) }}

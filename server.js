@@ -103,6 +103,7 @@ app.prepare().then(() => {
   const onlineUsers = new Map(); // anonUserId -> Set<socketId>
   const friendsByUser = new Map(); // anonUserId -> Set<anonUserId>
   const userProfiles = new Map(); // anonUserId -> { countryName, countryFlag }
+  const pendingFriendInvites = new Map(); // inviteId -> { inviterUserId, inviterSocketId, inviteeUserId, inviteeSocketId, mode, timeout }
 
   // Simple presence count (connected sockets)
   let connectedCount = 0;
@@ -111,6 +112,69 @@ app.prepare().then(() => {
     Promise.resolve(task).catch((error) => {
       console.error(label, error?.message || error);
     });
+  }
+
+  function logRuntimeStats(label = 'runtime') {
+    const memory = process.memoryUsage();
+    console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(memory.heapTotal / 1024 / 1024)}MB queue=${waitingQueue.length} rooms=${rooms.size} sessions=${userSessions.size} onlineUsers=${onlineUsers.size} profiles=${userProfiles.size} reputation=${userReputation.size} invites=${pendingFriendInvites.size}`);
+  }
+
+  function pruneRuntimeState() {
+    const now = Date.now();
+    const activeSocketIds = new Set(io.sockets.sockets.keys());
+
+    for (let i = waitingQueue.length - 1; i >= 0; i -= 1) {
+      const entry = waitingQueue[i];
+      const joinedAt = new Date(entry.joinedAt || now).getTime();
+      if (!activeSocketIds.has(entry.socketId) || now - joinedAt > 10 * 60 * 1000) {
+        waitingQueue.splice(i, 1);
+      }
+    }
+
+    for (const [roomId, room] of rooms.entries()) {
+      const startedAt = new Date(room.startedAt || now).getTime();
+      const stale = !activeSocketIds.has(room.user1) || !activeSocketIds.has(room.user2) || now - startedAt > 2 * 60 * 60 * 1000;
+      if (stale) {
+        rooms.delete(roomId);
+        roomActions.delete(roomId);
+      }
+    }
+
+    for (const [socketId, session] of userSessions.entries()) {
+      if (!activeSocketIds.has(socketId)) {
+        userSessions.delete(socketId);
+      } else {
+        session.lastSeen = new Date();
+      }
+    }
+
+    for (const [userId, sockets] of onlineUsers.entries()) {
+      for (const sid of [...sockets]) {
+        if (!activeSocketIds.has(sid)) sockets.delete(sid);
+      }
+      if (sockets.size === 0) onlineUsers.delete(userId);
+    }
+
+    for (const [inviteId, invite] of pendingFriendInvites.entries()) {
+      if (!activeSocketIds.has(invite.inviterSocketId) || !activeSocketIds.has(invite.inviteeSocketId)) {
+        if (invite.timeout) clearTimeout(invite.timeout);
+        pendingFriendInvites.delete(inviteId);
+      }
+    }
+
+    for (const [userId, rep] of userReputation.entries()) {
+      const lastSeen = new Date(rep.lastSeen || now).getTime();
+      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) {
+        userReputation.delete(userId);
+      }
+    }
+
+    for (const [userId, profile] of userProfiles.entries()) {
+      const lastSeen = new Date(profile.lastSeen || now).getTime();
+      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) {
+        userProfiles.delete(userId);
+      }
+    }
   }
 
   function normalizeInterestKeywords(rawKeywords = []) {
@@ -235,9 +299,11 @@ app.prepare().then(() => {
   function getOrCreateReputation(anonUserId) {
     if (!anonUserId) return { likesReceived: 0, reportsReceived: 0 };
     if (!userReputation.has(anonUserId)) {
-      userReputation.set(anonUserId, { likesReceived: 0, reportsReceived: 0 });
+      userReputation.set(anonUserId, { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() });
     }
-    return userReputation.get(anonUserId);
+    const rep = userReputation.get(anonUserId);
+    rep.lastSeen = new Date();
+    return rep;
   }
 
   function getRoomPartnerId(room, socketId) {
@@ -264,8 +330,27 @@ app.prepare().then(() => {
       name: session.displayName || `User ${String(getIdentityId(session) || '').slice(-4)}`,
       email: session.email || '',
       image: session.image || null,
+      countryCode: session.country?.countryCode || null,
       countryName: session.country?.countryName || 'Unknown',
       countryFlag: session.country?.countryFlag || '🌐',
+    };
+  }
+
+  function resolveCountryPayload(sessionCountry, fallbackProfile = null) {
+    if (sessionCountry?.countryName && sessionCountry.countryName !== 'Unknown') {
+      return sessionCountry;
+    }
+    if (fallbackProfile?.countryName && fallbackProfile.countryName !== 'Unknown') {
+      return {
+        countryCode: fallbackProfile.countryCode || null,
+        countryName: fallbackProfile.countryName,
+        countryFlag: fallbackProfile.countryFlag || '🌐',
+      };
+    }
+    return {
+      countryCode: null,
+      countryName: 'Unknown',
+      countryFlag: '🌐',
     };
   }
 
@@ -532,7 +617,7 @@ app.prepare().then(() => {
       partnerUserId: getIdentityId(sessionB),
       partnerProfile: buildProfileSnapshot(sessionB),
       partnerLanguage: sessionB.primaryLanguage,
-      partnerCountry: sessionB.country,
+      partnerCountry: resolveCountryPayload(sessionB.country, userProfiles.get(getIdentityId(sessionB))),
       partnerLikes: repB.likesReceived,
       commonLanguages,
       matchedInterests,
@@ -546,7 +631,7 @@ app.prepare().then(() => {
       partnerUserId: getIdentityId(sessionA),
       partnerProfile: buildProfileSnapshot(sessionA),
       partnerLanguage: sessionA.primaryLanguage,
-      partnerCountry: sessionA.country,
+      partnerCountry: resolveCountryPayload(sessionA.country, userProfiles.get(getIdentityId(sessionA))),
       partnerLikes: repA.likesReceived,
       commonLanguages,
       matchedInterests,
@@ -657,6 +742,9 @@ app.prepare().then(() => {
       const identityId = getIdentityId(session)
       if (!identityId) return
 
+      session.country = resolveCountryPayload(session.country, userProfiles.get(identityId))
+      userSessions.set(socket.id, session)
+
       await enforceSingleActiveSocket(identityId, socket.id)
 
       if (previousIdentityId && previousIdentityId !== identityId) {
@@ -671,14 +759,16 @@ app.prepare().then(() => {
         name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
         email: session.email || '',
         image: session.image || null,
+        countryCode: session.country?.countryCode || null,
         countryName: session.country?.countryName || 'Unknown',
         countryFlag: session.country?.countryFlag || '🌐',
+        lastSeen: new Date(),
       }
 
       userProfiles.set(identityId, storedProfile)
-      await socialStore.upsertUserProfile(storedProfile)
-      await refreshSocialViews(identityId)
-      await notifyFriendsOnlineStatusChanged(identityId)
+      queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert identified profile')
+      queueBackground(refreshSocialViews(identityId), '[Social] Failed to refresh identified social views')
+      queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friend online status change')
     })
 
     socket.on('join-queue', async (data) => {
@@ -707,6 +797,8 @@ app.prepare().then(() => {
       };
       userSessions.set(socket.id, session);
       const identityId = getIdentityId(session);
+      session.country = resolveCountryPayload(session.country, userProfiles.get(identityId));
+      userSessions.set(socket.id, session);
 
       const moderationBlock = await getModerationBlock(identityId);
       if (moderationBlock?.blockedUntil) {
@@ -724,15 +816,25 @@ app.prepare().then(() => {
         name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
         email: session.email || '',
         image: session.image || null,
+        countryCode: session.country?.countryCode || null,
         countryName: session.country?.countryName || 'Unknown',
         countryFlag: session.country?.countryFlag || '🌐',
+        lastSeen: new Date(),
       };
       userProfiles.set(identityId, storedProfile);
-      await socialStore.upsertUserProfile(storedProfile);
-      await emitFriendsStatus(identityId);
-      await emitFriendRequests(identityId);
-      await emitHistory(identityId);
-      await notifyFriendsOnlineStatusChanged(identityId);
+      queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert queue profile');
+      queueBackground(emitFriendsStatus(identityId), '[Social] Failed to emit friends status');
+      queueBackground(emitFriendRequests(identityId), '[Social] Failed to emit friend requests');
+      queueBackground(emitHistory(identityId), '[Social] Failed to emit history');
+      queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friends online status');
+
+      console.log('[Socket] Queue candidate ready:', {
+        socketId: socket.id,
+        identityId,
+        mode: session.mode,
+        interests: session.interests,
+        country: session.country,
+      });
 
       // Try to find a match
       const match = findMatch(socket.id, session.mode, session.interests);
@@ -759,6 +861,7 @@ app.prepare().then(() => {
           interests: session.interests,
         });
         console.log('[Socket] Added to queue. Queue size:', waitingQueue.length);
+        logRuntimeStats('queue-add');
 
         broadcastStats();
       }
@@ -822,23 +925,32 @@ app.prepare().then(() => {
 
       const identityId = getIdentityId(session);
       const nextName = typeof data?.name === 'string' ? data.name.trim() : '';
-      if (!identityId || !nextName) return;
+      const nextCustomImage = typeof data?.customImage === 'string' ? data.customImage.trim() : undefined;
+      if (!identityId || (!nextName && typeof nextCustomImage === 'undefined')) return;
 
-      session.displayName = nextName;
+      if (nextName) {
+        session.displayName = nextName;
+      }
+      if (typeof nextCustomImage !== 'undefined') {
+        session.image = nextCustomImage || authUser?.image || null;
+      }
       userSessions.set(socket.id, session);
 
       const nextProfile = {
         userId: identityId,
-        name: nextName,
+        name: nextName || session.displayName,
         email: session.email || '',
         image: session.image || null,
+        customImage: typeof nextCustomImage !== 'undefined' ? (nextCustomImage || null) : (userProfiles.get(identityId)?.customImage || null),
         countryName: session.country?.countryName || 'Unknown',
         countryFlag: session.country?.countryFlag || '🌐',
+        lastSeen: new Date(),
       };
 
       socket.data.authUser = {
         ...authUser,
-        name: nextName,
+        name: nextName || authUser?.name,
+        image: session.image || authUser?.image || null,
       };
 
       userProfiles.set(identityId, nextProfile);
@@ -1064,21 +1176,87 @@ app.prepare().then(() => {
         socket.emit('friend-connect-result', { ok: false, reason: 'offline' });
         return;
       }
+      const inviteId = generateId();
+      const timeout = setTimeout(() => {
+        pendingFriendInvites.delete(inviteId);
+        io.to(socket.id).emit('friend-connect-result', { ok: false, reason: 'expired' });
+      }, 30_000);
 
+      pendingFriendInvites.set(inviteId, {
+        inviteId,
+        inviterUserId: myAnon,
+        inviterSocketId: socket.id,
+        inviteeUserId: friendAnonId,
+        inviteeSocketId: friendSocketId,
+        mode: session.mode || friendSession.mode,
+        timeout,
+      });
+
+      io.to(friendSocketId).emit('friend-connect-invite', {
+        inviteId,
+        fromUserId: myAnon,
+        mode: session.mode || friendSession.mode,
+        profile: buildProfileSnapshot(session),
+      });
+      socket.emit('friend-connect-result', { ok: true, pending: true, inviteId });
+    });
+
+    socket.on('respond-friend-connect', async (data = {}) => {
+      const session = userSessions.get(socket.id);
+      if (!session) return;
+      const inviteId = data?.inviteId;
+      const accepted = !!data?.accepted;
+      if (!inviteId || !pendingFriendInvites.has(inviteId)) return;
+
+      const invite = pendingFriendInvites.get(inviteId);
+      if (invite.timeout) clearTimeout(invite.timeout);
+      pendingFriendInvites.delete(inviteId);
+
+      if (getIdentityId(session) !== invite.inviteeUserId) return;
+
+      if (!accepted) {
+        io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'declined' });
+        return;
+      }
+
+      const inviterSession = userSessions.get(invite.inviterSocketId);
+      const inviteeSession = userSessions.get(socket.id);
+      if (!inviterSession || !inviteeSession) {
+        io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'offline' });
+        return;
+      }
+
+      leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
+      removeFromQueue(invite.inviterSocketId);
       leaveRoom(socket);
       removeFromQueue(socket.id);
-      leaveRoom(friendSocket);
-      removeFromQueue(friendSocketId);
 
-      const roomId = emitMatchedPair(socket.id, session, friendSocketId, friendSession, {
-        mode: session.mode || friendSession.mode,
+      const roomId = emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
+        mode: invite.mode || inviterSession.mode || inviteeSession.mode,
         viaFriend: true,
       });
 
+      io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: true, roomId });
       socket.emit('friend-connect-result', { ok: true, roomId });
-      io.to(friendSocketId).emit('friend-connect-result', { ok: true, roomId });
-
       broadcastStats();
+    });
+
+    socket.on('unfriend', async (data = {}) => {
+      const session = userSessions.get(socket.id);
+      if (!session) return;
+      if (!requireAuthenticatedUser(socket, 'unfriend')) return;
+      const myUserId = getIdentityId(session);
+      const friendUserId = data?.friendUserId;
+      if (!friendUserId) return;
+
+      const result = await socialStore.removeFriendship({ userId: myUserId, friendUserId });
+      socket.emit('action-feedback', { type: 'unfriend', status: result.status === 'removed' ? 'ok' : result.status });
+      if (result.status === 'removed') {
+        await refreshSocialViews(myUserId);
+        if (onlineUsers.has(friendUserId)) {
+          await refreshSocialViews(friendUserId);
+        }
+      }
     });
 
     socket.on('get-friends-status', async () => {
@@ -1114,8 +1292,8 @@ app.prepare().then(() => {
       broadcastStats();
     });
 
-    socket.on('disconnect', () => {
-      console.log('[Socket] Disconnected:', socket.id);
+    socket.on('disconnect', (reason) => {
+      console.log('[Socket] Disconnected:', socket.id, reason);
       const session = userSessions.get(socket.id);
       leaveRoom(socket);
       removeFromQueue(socket.id);
@@ -1133,6 +1311,15 @@ app.prepare().then(() => {
       broadcastStats();
     });
   });
+
+  setInterval(() => {
+    try {
+      pruneRuntimeState();
+      logRuntimeStats('interval');
+    } catch (error) {
+      console.error('[Runtime] Failed during prune/log cycle:', error?.message || error);
+    }
+  }, 60_000);
 
   // Status endpoint
   const originalListeners = httpServer.listeners('request').slice();

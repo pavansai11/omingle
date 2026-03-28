@@ -39,3 +39,7 @@ services:
         value: 3478
       - key: TURN_CREDENTIAL_TTL_SECONDS
         value: 3600
+      - key: NEXT_PUBLIC_MONETAG_ZONE_WAITING
+        value: 10800687
+      - key: NEXT_PUBLIC_DIRECT_LINK_URL
+        value: https://omg10.com/4/10800693
