@@ -88,7 +88,13 @@ Important values you must finalize:
 - `GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_SECRET=...`
 - `MONGODB_URI=...` *(recommended)*
-- Azure speech/translation keys
+- `REDIS_URL=rediss://...`
+- `UPSTASH_REDIS_REST_URL=...`
+- `UPSTASH_REDIS_REST_TOKEN=...`
+- `COTURN_STATIC_AUTH_SECRET=...`
+- `TURN_HOST=turn.hippichat.com`
+- `TURN_PORT=3478`
+- `TURN_CREDENTIAL_TTL_SECONDS=3600`
 
 For production, prefer a full **MongoDB Atlas** connection string.
 
@@ -129,7 +135,15 @@ At minimum:
 - `GOOGLE_CLIENT_ID=...`
 - `GOOGLE_CLIENT_SECRET=...`
 - `MONGODB_URI=...`
+- `DB_NAME=HippiChat`
+- `REDIS_URL=rediss://...`
+- `UPSTASH_REDIS_REST_URL=...`
+- `UPSTASH_REDIS_REST_TOKEN=...`
 - `CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000`
+- `COTURN_STATIC_AUTH_SECRET=...`
+- `TURN_HOST=turn.hippichat.com`
+- `TURN_PORT=3478`
+- `TURN_CREDENTIAL_TTL_SECONDS=3600`
 
 Then redeploy.
 
@@ -245,12 +259,11 @@ After deployment, test:
 ## 13. Important limitations for now
 
 ### Matchmaking scaling
-Current queue/rooms/friends presence are in memory.
-So keep:
+Redis-backed infrastructure is now required for safe multi-instance scale. Until the full rollout is validated in production, keep:
 
 - `max instances = 1`
 
-If you want true scaling later, we should move queue/socket coordination to Redis.
+After validation, you can raise max instances gradually.
 
 ### MongoDB
 You still need a real production DB target.

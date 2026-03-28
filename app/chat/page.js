@@ -5,7 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
-import { RTC_CONFIG, MAX_CHAT_MESSAGES, LANGUAGE_FACTS } from '@/lib/constants'
+import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
   Mic, MicOff, Video, VideoOff, SkipForward, Phone, Flag, Heart, Captions, UserPlus,
   Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal, AlertTriangle
@@ -19,6 +19,14 @@ const CAPTION_DEBOUNCE_MS = 700
 const CAPTIONS_UI_ENABLED = false
 const BLUR_FEATURE_ENABLED = false
 const MAX_HISTORY_ITEMS = 20
+const REPORT_REASONS = [
+  { value: 'nudity', label: 'Nudity / sexual content' },
+  { value: 'harassment', label: 'Harassment / bullying' },
+  { value: 'hate-speech', label: 'Hate speech' },
+  { value: 'spam', label: 'Spam / scam' },
+  { value: 'underage', label: 'Appears underage' },
+  { value: 'other', label: 'Other' },
+]
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -72,6 +80,15 @@ function createAnonUserId() {
   return `anon_${generateId()}_${Date.now()}`
 }
 
+function normalizeInterestKeywords(rawKeywords = []) {
+  return [...new Set(
+    (Array.isArray(rawKeywords) ? rawKeywords : [])
+      .map((keyword) => String(keyword || '').trim().toLowerCase())
+      .filter(Boolean)
+      .map((keyword) => keyword.slice(0, 32))
+  )].slice(0, MAX_INTEREST_KEYWORDS)
+}
+
 function ChatPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -115,6 +132,10 @@ function ChatPageContent() {
   const [showPreferences, setShowPreferences] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [modeSwitchConfirm, setModeSwitchConfirm] = useState(null)
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportReason, setReportReason] = useState('harassment')
+  const [reportDetails, setReportDetails] = useState('')
+  const [accountBlockedInfo, setAccountBlockedInfo] = useState(null)
   const [interactionHistory, setInteractionHistory] = useState([])
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] })
   const [sessionUser, setSessionUser] = useState(null)
@@ -148,6 +169,10 @@ function ChatPageContent() {
 
   // Presence stats
   const [onlineCount, setOnlineCount] = useState(null)
+  const [interestKeywords, setInterestKeywords] = useState([])
+  const [interestInput, setInterestInput] = useState('')
+  const [matchedInterests, setMatchedInterests] = useState([])
+  const [turnIceServers, setTurnIceServers] = useState([])
 
   const partnerDisplayCountry = useMemo(() => {
     if (partnerCountry) return partnerCountry
@@ -249,6 +274,11 @@ function ChatPageContent() {
         setBackgroundBlurEnabled(savedBlurPref === 'true')
       }
 
+      const savedInterests = localStorage.getItem('hippichat_interest_keywords')
+      if (savedInterests) {
+        setInterestKeywords(normalizeInterestKeywords(JSON.parse(savedInterests)))
+      }
+
       let anonId = localStorage.getItem('omingle_anon_user_id')
       if (!anonId) {
         anonId = createAnonUserId()
@@ -259,6 +289,12 @@ function ChatPageContent() {
       anonUserIdRef.current = `anon_fallback_${generateId()}`
     }
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hippichat_interest_keywords', JSON.stringify(interestKeywords))
+    } catch (e) {}
+  }, [interestKeywords])
 
   useEffect(() => {
     let cancelled = false
@@ -282,6 +318,35 @@ function ChatPageContent() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTurnCredentials() {
+      try {
+        const res = await fetch(TURN_CREDENTIALS_ENDPOINT, { cache: 'no-store' })
+        const data = await res.json()
+        if (!cancelled && res.ok && Array.isArray(data?.urls) && data?.username && data?.credential) {
+          setTurnIceServers([
+            {
+              urls: data.urls,
+              username: data.username,
+              credential: data.credential,
+            },
+          ])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTurnIceServers([])
+        }
+      }
+    }
+
+    loadTurnCredentials()
+    return () => {
+      cancelled = true
+    }
+  }, [sessionUser?.id])
 
   useEffect(() => {
     if (!sessionUser?.id) return
@@ -346,6 +411,17 @@ function ChatPageContent() {
     setActionFeedback(message)
     if (actionFeedbackTimeoutRef.current) clearTimeout(actionFeedbackTimeoutRef.current)
     actionFeedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 2500)
+  }
+
+  function addInterestKeyword() {
+    const nextKeyword = interestInput.trim().toLowerCase()
+    if (!nextKeyword) return
+    setInterestKeywords((prev) => normalizeInterestKeywords([...prev, nextKeyword]))
+    setInterestInput('')
+  }
+
+  function removeInterestKeyword(keywordToRemove) {
+    setInterestKeywords((prev) => prev.filter((keyword) => keyword !== keywordToRemove))
   }
 
   function upsertInteractionHistory(entry) {
@@ -738,6 +814,26 @@ function ChatPageContent() {
         socket.on('queue-status', (data) => {
           console.log('[Socket] Queue status:', data)
         })
+        socket.on('account-blocked', (data) => {
+          pendingStartRef.current = false
+          resetSessionUi()
+          setConnectionState('idle')
+          setAccountBlockedInfo(data || null)
+          setShowPreferences(false)
+          setSettingsOpen(false)
+          showActionFeedback(data?.message || 'Account temporarily blocked from matching')
+        })
+        socket.on('force-logout', async () => {
+          try {
+            await fetch('/api/auth/logout', { method: 'POST' })
+          } catch (error) {}
+          setSessionUser(null)
+          setSettingsOpen(false)
+          setShowPreferences(false)
+          pendingStartRef.current = false
+          showActionFeedback('Signed out because this account was used elsewhere')
+          router.replace('/')
+        })
         socket.emit('get-friends-status')
 
         socket.on('connect_error', (err) => {
@@ -778,6 +874,8 @@ function ChatPageContent() {
         socket.off('action-feedback')
         socket.off('stats')
         socket.off('queue-status')
+        socket.off('account-blocked')
+        socket.off('force-logout')
         socket.disconnect()
       }
 
@@ -1078,6 +1176,7 @@ function ChatPageContent() {
       primaryLanguage,
       spokenLanguages: additionalLanguages,
       mode,
+      interestKeywords,
       anonUserId: anonUserIdRef.current,
       userId: sessionUser?.id || null,
       displayName: sessionUser?.name || null,
@@ -1098,6 +1197,7 @@ function ChatPageContent() {
     setPartnerCountry(data.partnerCountry || deriveCountryFromLanguage(data.partnerLanguage))
     showCommonLanguages(data.commonLanguages)
     setPartnerLikes(typeof data?.partnerLikes === 'number' ? data.partnerLikes : 0)
+    setMatchedInterests(Array.isArray(data?.matchedInterests) ? data.matchedInterests : [])
     setRoomId(data.roomId)
     setShowFriendsPanel(false)
     setHasAddedFriendForCurrentMatch(false)
@@ -1228,7 +1328,7 @@ function ChatPageContent() {
   function initPeerConnection(isInitiator, peerId) {
     cleanupPeerConnection()
 
-    const pc = new RTCPeerConnection(RTC_CONFIG)
+    const pc = new RTCPeerConnection(buildRtcConfig(turnIceServers))
     pcRef.current = pc
 
     // Add local tracks
@@ -1449,6 +1549,8 @@ function ChatPageContent() {
     setHasLikedPartner(false)
     setHasReportedPartner(false)
     setActionFeedback(null)
+    setReportModalOpen(false)
+    setMatchedInterests([])
     setCallDuration(0)
     setUnreadCount(0)
     if (clearMessages) setMessages([])
@@ -1655,7 +1757,7 @@ function ChatPageContent() {
       <div className="relative z-30 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between gap-3">
           <button onClick={() => router.push('/')} className="flex items-center">
-            <img src="/logo.svg" alt="HippiChat" className="h-9 sm:h-10 w-auto" />
+            <img src="/logo.svg" alt="HippiChat" className="h-9 sm:h-11 lg:h-12 w-auto" />
           </button>
 
           <div className="flex items-center justify-end gap-2 min-w-[44px]">
@@ -1747,10 +1849,118 @@ function ChatPageContent() {
                 <p className="text-xs uppercase tracking-wide text-gray-500 mb-1">Mode</p>
                 <p>{mode === 'video' ? 'Video Chat' : 'Voice Chat'}</p>
               </div>
+              <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3">
+                <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Interest keywords</p>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    type="text"
+                    value={interestInput}
+                    onChange={(event) => setInterestInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        addInterestKeyword()
+                      }
+                    }}
+                    placeholder="e.g. gaming, music, anime"
+                    className="flex-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                  />
+                  <button
+                    onClick={addInterestKeyword}
+                    className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-500"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                {interestKeywords.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {interestKeywords.map((keyword) => (
+                      <button
+                        key={keyword}
+                        onClick={() => removeInterestKeyword(keyword)}
+                        className="rounded-full border border-violet-500/30 bg-violet-600/10 px-3 py-1 text-xs text-violet-100 hover:bg-violet-600/20"
+                      >
+                        #{keyword} ×
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-500">
+                    We first try to match people with overlapping interests, then quickly fall back to the next available user.
+                  </p>
+                )}
+              </div>
               <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3 text-gray-400 text-xs">
-                Advanced filters/preferences can be extended here later.
+                Interest filters apply to your next search and are tuned for low wait times.
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {reportModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">Report this user</h3>
+              <button onClick={() => setReportModalOpen(false)} className="text-gray-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 mb-4">
+              {REPORT_REASONS.map((reason) => (
+                <button
+                  key={reason.value}
+                  onClick={() => setReportReason(reason.value)}
+                  className={`w-full rounded-xl border px-4 py-3 text-left text-sm transition-all ${reportReason === reason.value
+                    ? 'border-amber-400/40 bg-amber-500/10 text-amber-100'
+                    : 'border-gray-800 bg-gray-800/40 text-gray-300 hover:bg-gray-800'}`}
+                >
+                  {reason.label}
+                </button>
+              ))}
+            </div>
+
+            <textarea
+              value={reportDetails}
+              onChange={(event) => setReportDetails(event.target.value)}
+              placeholder="Optional details"
+              className="mb-4 min-h-24 w-full rounded-xl border border-gray-800 bg-gray-800/40 px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setReportModalOpen(false)}
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleReportPartner()}
+                className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-gray-950 hover:bg-amber-400"
+              >
+                Submit report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {accountBlockedInfo?.blockedUntil && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-red-500/20 bg-gray-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-2">Account temporarily restricted</h3>
+            <p className="text-sm text-gray-300 mb-4">
+              {accountBlockedInfo.message || `You cannot start new matches until ${new Date(accountBlockedInfo.blockedUntil).toLocaleString()}.`}
+            </p>
+            <button
+              onClick={() => setAccountBlockedInfo(null)}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-100"
+            >
+              Okay
+            </button>
           </div>
         </div>
       )}
@@ -1807,6 +2017,11 @@ function ChatPageContent() {
                         playsInline
                         className="w-full h-full object-contain bg-black"
                       />
+                  <img
+                    src="/logo.svg"
+                    alt="HippiChat watermark"
+                    className="pointer-events-none absolute bottom-4 right-4 h-9 w-auto select-none opacity-10 grayscale brightness-[2.4]"
+                  />
 
                       {connectionState !== 'connected' && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-6 text-center">
@@ -1853,7 +2068,7 @@ function ChatPageContent() {
                         <Heart className={`w-3.5 h-3.5 ${hasLikedPartner ? 'fill-pink-400 text-pink-400' : ''}`} /> Like
                       </button>
                       <button
-                        onClick={handleReportPartner}
+                        onClick={() => setReportModalOpen(true)}
                         disabled={!partnerId || hasReportedPartner}
                         className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-all ${hasReportedPartner
                           ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
@@ -1876,6 +2091,11 @@ function ChatPageContent() {
                         playsInline
                         className="w-full h-full object-contain mirror bg-black"
                         style={{ transform: 'scaleX(-1)' }}
+                      />
+                      <img
+                        src="/logo.svg"
+                        alt="HippiChat watermark"
+                        className="pointer-events-none absolute bottom-3 right-3 h-7 w-auto select-none opacity-10 grayscale brightness-[2.4]"
                       />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
@@ -1946,6 +2166,16 @@ function ChatPageContent() {
               <span className="text-xs text-pink-300 flex items-center gap-1 ml-1">
                 <Heart className="w-3 h-3 fill-pink-400 text-pink-400" /> {partnerLikes}
               </span>
+            </div>
+          )}
+
+          {matchedInterests.length > 0 && connectionState === 'connected' && (
+            <div className="absolute top-28 left-4 z-10 flex flex-wrap gap-2 max-w-[70%]">
+              {matchedInterests.map((interest) => (
+                <span key={interest} className="rounded-full border border-violet-400/20 bg-violet-500/15 px-2.5 py-1 text-[11px] text-violet-100 backdrop-blur">
+                  #{interest}
+                </span>
+              ))}
             </div>
           )}
 
@@ -2027,7 +2257,7 @@ function ChatPageContent() {
                             </button>
                           )}
                           <button
-                            onClick={handleReportPartner}
+                            onClick={() => setReportModalOpen(true)}
                             disabled={!isCurrent || hasReportedPartner}
                             className="rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40"
                           >

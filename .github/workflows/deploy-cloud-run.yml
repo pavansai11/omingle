@@ -29,13 +29,13 @@ jobs:
 
       - name: Build container image
         run: |
-          IMAGE="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_ARTIFACT_REPOSITORY }}/omingle:${{ github.sha }}"
+          IMAGE="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_ARTIFACT_REPOSITORY }}/hippichat:${{ github.sha }}"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
           gcloud builds submit --tag "$IMAGE"
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy omingle \
+          gcloud run deploy hippichat \
             --image "$IMAGE" \
             --region "${{ secrets.GCP_REGION }}" \
             --platform managed \

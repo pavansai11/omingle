@@ -88,6 +88,12 @@ app.prepare().then(() => {
     pingInterval: 25000,
   });
 
+  const redisAdapter = redis.createSocketIoAdapter?.();
+  if (redisAdapter) {
+    io.adapter(redisAdapter);
+    console.log('[Socket] Redis adapter enabled');
+  }
+
   // In-memory state
   const waitingQueue = []; // { socketId, primaryLanguage, spokenLanguages, mode, joinedAt }
   const rooms = new Map(); // roomId -> { user1, user2, mode, startedAt }
@@ -107,6 +113,107 @@ app.prepare().then(() => {
     });
   }
 
+  function normalizeInterestKeywords(rawKeywords = []) {
+    return [...new Set(
+      (Array.isArray(rawKeywords) ? rawKeywords : [])
+        .map((keyword) => String(keyword || '').trim().toLowerCase())
+        .filter(Boolean)
+        .map((keyword) => keyword.slice(0, 32))
+    )].slice(0, 5);
+  }
+
+  function getMatchedInterests(interestsA = [], interestsB = []) {
+    if (!interestsA.length || !interestsB.length) return [];
+    const setB = new Set(interestsB);
+    return interestsA.filter((keyword) => setB.has(keyword));
+  }
+
+  function getQueueEntryWaitMs(entry) {
+    return Math.max(0, Date.now() - new Date(entry.joinedAt || Date.now()).getTime());
+  }
+
+  function getActiveSocketKey(identityId) {
+    return `hippichat:active-socket:${identityId}`;
+  }
+
+  function getReportDedupeKey(reporterId, reportedId) {
+    return `hippichat:report-dedupe:${reporterId}:${reportedId}`;
+  }
+
+  function getReportCountKey(reportedId) {
+    return `hippichat:report-count:${reportedId}`;
+  }
+
+  function getUserBlockKey(identityId) {
+    return `hippichat:user-block:${identityId}`;
+  }
+
+  async function getModerationBlock(identityId) {
+    if (!identityId) return null;
+    return redis.getJson(getUserBlockKey(identityId)).catch(() => null);
+  }
+
+  async function setModerationBlock(identityId, payload, ttlSeconds) {
+    if (!identityId || !ttlSeconds) return;
+    await redis.setJson(getUserBlockKey(identityId), payload, ttlSeconds).catch(() => null);
+  }
+
+  async function applyModerationThreshold(reportedId, reason = 'other') {
+    if (!reportedId) return null;
+    const severeReasons = new Set(['underage', 'nudity', 'hate-speech', 'threats']);
+    const count = await redis.incr(getReportCountKey(reportedId), 60 * 60 * 24).catch(() => 1);
+
+    let ttlSeconds = 0;
+    if (severeReasons.has(reason)) ttlSeconds = 60 * 60 * 24;
+    else if (count >= 3) ttlSeconds = 60 * 60 * 24;
+    else if (count >= 2) ttlSeconds = 60 * 60;
+
+    if (!ttlSeconds) return null;
+
+    const blockedUntil = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    const payload = { blockedUntil, reason, count };
+    await setModerationBlock(reportedId, payload, ttlSeconds);
+    return payload;
+  }
+
+  function formatBlockMessage(block) {
+    if (!block?.blockedUntil) return 'Your account is temporarily restricted from matching.';
+    return `Your account is temporarily restricted from matching until ${new Date(block.blockedUntil).toLocaleString()}.`;
+  }
+
+  function disconnectUserSockets(identityId, blockPayload) {
+    if (!identityId || !onlineUsers.has(identityId)) return;
+    for (const sid of onlineUsers.get(identityId)) {
+      io.to(sid).emit('account-blocked', {
+        ...blockPayload,
+        message: formatBlockMessage(blockPayload),
+      });
+      io.in(sid).disconnectSockets(true);
+    }
+  }
+
+  async function enforceSingleActiveSocket(identityId, socketId) {
+    if (!identityId || !socketId) return;
+    const key = getActiveSocketKey(identityId);
+    const existingSocketId = await redis.getJson(key).catch(() => null);
+
+    if (existingSocketId && existingSocketId !== socketId) {
+      io.to(existingSocketId).emit('force-logout', { reason: 'signed-in-elsewhere' });
+      io.in(existingSocketId).disconnectSockets(true);
+    }
+
+    await redis.setJson(key, socketId, 60 * 60 * 24 * 7).catch(() => null);
+  }
+
+  async function clearActiveSocket(identityId, socketId) {
+    if (!identityId || !socketId) return;
+    const key = getActiveSocketKey(identityId);
+    const currentSocketId = await redis.getJson(key).catch(() => null);
+    if (currentSocketId === socketId) {
+      await redis.delKey(key).catch(() => null);
+    }
+  }
+
   function broadcastStats() {
     io.emit('stats', {
       online: connectedCount,
@@ -115,7 +222,7 @@ app.prepare().then(() => {
     });
 
     queueBackground(
-      redis.setJson('omingle:stats', {
+      redis.setJson('hippichat:stats', {
         online: connectedCount,
         queueLength: waitingQueue.length,
         rooms: rooms.size,
@@ -227,7 +334,7 @@ app.prepare().then(() => {
     onlineUsers.get(anonUserId).add(socketId);
 
     queueBackground(
-      redis.setJson(`omingle:presence:${anonUserId}`, {
+      redis.setJson(`hippichat:presence:${anonUserId}`, {
         userId: anonUserId,
         sockets: [...onlineUsers.get(anonUserId)],
         online: true,
@@ -247,8 +354,8 @@ app.prepare().then(() => {
 
     queueBackground(
       sockets.size === 0
-        ? redis.delKey(`omingle:presence:${anonUserId}`)
-        : redis.setJson(`omingle:presence:${anonUserId}`, {
+        ? redis.delKey(`hippichat:presence:${anonUserId}`)
+        : redis.setJson(`hippichat:presence:${anonUserId}`, {
             userId: anonUserId,
             sockets: [...sockets],
             online: true,
@@ -344,11 +451,12 @@ app.prepare().then(() => {
       socketId: entry.socketId,
       identityId: getIdentityId(entry),
       mode: entry.mode,
+      interests: entry.interests || [],
       joinedAt: entry.joinedAt,
     }));
 
     queueBackground(
-      redis.setJson('omingle:queue', snapshot, 180),
+      redis.setJson('hippichat:queue', snapshot, 180),
       '[Redis] Failed to sync queue snapshot'
     );
   }
@@ -356,20 +464,21 @@ app.prepare().then(() => {
   function syncRoomSnapshot(roomId) {
     const room = rooms.get(roomId);
     if (!room) {
-      queueBackground(redis.delKey(`omingle:room:${roomId}`), '[Redis] Failed to delete room snapshot');
+      queueBackground(redis.delKey(`hippichat:room:${roomId}`), '[Redis] Failed to delete room snapshot');
       return;
     }
 
     const user1Session = userSessions.get(room.user1);
     const user2Session = userSessions.get(room.user2);
     queueBackground(
-      redis.setJson(`omingle:room:${roomId}`, {
+      redis.setJson(`hippichat:room:${roomId}`, {
         roomId,
         user1SocketId: room.user1,
         user2SocketId: room.user2,
         user1Id: getIdentityId(user1Session),
         user2Id: getIdentityId(user2Session),
         mode: room.mode,
+        matchedInterests: room.matchedInterests || [],
         startedAt: room.startedAt,
       }, 180),
       '[Redis] Failed to sync room snapshot'
@@ -394,6 +503,7 @@ app.prepare().then(() => {
 
   function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
     const roomId = options.roomId || generateId();
+    const matchedInterests = getMatchedInterests(sessionA.interests || [], sessionB.interests || []);
 
     rooms.set(roomId, {
       user1: socketIdA,
@@ -401,6 +511,7 @@ app.prepare().then(() => {
       mode: options.mode || sessionA.mode || sessionB.mode || 'video',
       startedAt: new Date(),
       viaFriend: !!options.viaFriend,
+      matchedInterests,
     });
 
     roomActions.set(roomId, {
@@ -424,6 +535,7 @@ app.prepare().then(() => {
       partnerCountry: sessionB.country,
       partnerLikes: repB.likesReceived,
       commonLanguages,
+      matchedInterests,
       isFriendConnection: !!options.viaFriend,
       isInitiator: true,
     });
@@ -437,6 +549,7 @@ app.prepare().then(() => {
       partnerCountry: sessionA.country,
       partnerLikes: repA.likesReceived,
       commonLanguages,
+      matchedInterests,
       isFriendConnection: !!options.viaFriend,
       isInitiator: false,
     });
@@ -454,13 +567,25 @@ app.prepare().then(() => {
     return roomId;
   }
 
-  function findMatch(socketId, mode) {
-    // Find someone in queue with same mode
-    const idx = waitingQueue.findIndex(u => u.mode === mode && u.socketId !== socketId);
-    if (idx !== -1) {
-      return waitingQueue.splice(idx, 1)[0];
-    }
-    return null;
+  function findMatch(socketId, mode, interests = []) {
+    const normalizedInterests = normalizeInterestKeywords(interests);
+    const candidates = waitingQueue
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => entry.mode === mode && entry.socketId !== socketId)
+      .sort((a, b) => getQueueEntryWaitMs(b.entry) - getQueueEntryWaitMs(a.entry));
+
+    const bestInterestCandidate = candidates
+      .map((candidate) => ({
+        ...candidate,
+        overlap: getMatchedInterests(normalizedInterests, candidate.entry.interests || []),
+      }))
+      .filter((candidate) => candidate.overlap.length > 0)
+      .sort((a, b) => b.overlap.length - a.overlap.length || a.index - b.index)[0];
+
+    const selected = bestInterestCandidate || candidates[0];
+    if (!selected) return null;
+
+    return waitingQueue.splice(selected.index, 1)[0] || null;
   }
 
   function leaveRoom(socket) {
@@ -532,6 +657,8 @@ app.prepare().then(() => {
       const identityId = getIdentityId(session)
       if (!identityId) return
 
+      await enforceSingleActiveSocket(identityId, socket.id)
+
       if (previousIdentityId && previousIdentityId !== identityId) {
         removeOnlineSocket(previousIdentityId, socket.id)
       }
@@ -555,7 +682,7 @@ app.prepare().then(() => {
     })
 
     socket.on('join-queue', async (data) => {
-      const { primaryLanguage, spokenLanguages, mode, anonUserId, country, userId, displayName, email, image } = data;
+      const { primaryLanguage, spokenLanguages, mode, anonUserId, country, interestKeywords } = data;
       console.log('[Socket] join-queue:', socket.id, mode, primaryLanguage?.code);
       const authUser = socket.data?.authUser || null
 
@@ -574,11 +701,22 @@ app.prepare().then(() => {
         email: authUser?.email || '',
         image: authUser?.image || null,
         country: country?.countryName ? country : { countryCode: null, countryName: 'Unknown', countryFlag: '🌐' },
+        interests: normalizeInterestKeywords(interestKeywords),
         roomId: null,
         joinedAt: new Date(),
       };
       userSessions.set(socket.id, session);
       const identityId = getIdentityId(session);
+
+      const moderationBlock = await getModerationBlock(identityId);
+      if (moderationBlock?.blockedUntil) {
+        socket.emit('account-blocked', {
+          ...moderationBlock,
+          message: formatBlockMessage(moderationBlock),
+        });
+        return;
+      }
+
       getOrCreateReputation(identityId);
       addOnlineSocket(identityId, socket.id);
       const storedProfile = {
@@ -597,7 +735,7 @@ app.prepare().then(() => {
       await notifyFriendsOnlineStatusChanged(identityId);
 
       // Try to find a match
-      const match = findMatch(socket.id, session.mode);
+      const match = findMatch(socket.id, session.mode, session.interests);
       if (match) {
         const matchSession = userSessions.get(match.socketId);
         if (!matchSession) {
@@ -618,6 +756,7 @@ app.prepare().then(() => {
         socket.emit('queue-status', {
           position: waitingQueue.length,
           queueLength: waitingQueue.length,
+          interests: session.interests,
         });
         console.log('[Socket] Added to queue. Queue size:', waitingQueue.length);
 
@@ -646,7 +785,7 @@ app.prepare().then(() => {
 
     socket.on('send-message', async (data) => {
       try {
-        const allowed = await redis.checkRateLimit(`omingle:rate:message:${socket.id}`, 40, 15);
+        const allowed = await redis.checkRateLimit(`hippichat:rate:message:${socket.id}`, 40, 15);
         if (!allowed) {
           socket.emit('action-feedback', { type: 'message', status: 'rate-limited' });
           return;
@@ -762,6 +901,8 @@ app.prepare().then(() => {
 
       const actorAnon = getIdentityId(session);
       const actions = roomActions.get(session.roomId) || { likes: new Set(), reports: new Set() };
+      const reason = data?.reason || 'other';
+      const details = typeof data?.details === 'string' ? data.details : '';
 
       if (actions.reports.has(actorAnon)) {
         socket.emit('action-feedback', { type: 'report', status: 'duplicate' });
@@ -777,13 +918,38 @@ app.prepare().then(() => {
       const partnerRep = getOrCreateReputation(partnerAnon);
       partnerRep.reportsReceived += 1;
 
+      queueBackground((async () => {
+        const dedupeKey = getReportDedupeKey(actorAnon, partnerAnon);
+        const alreadyCounted = await redis.getJson(dedupeKey).catch(() => null);
+        if (!alreadyCounted) {
+          await redis.setJson(dedupeKey, true, 60 * 60 * 24).catch(() => null);
+          const blockPayload = await applyModerationThreshold(partnerAnon, reason);
+          if (blockPayload) {
+            disconnectUserSockets(partnerAnon, blockPayload);
+          }
+        }
+
+        await socialStore.createReport({
+          reporterId: actorAnon,
+          reportedId: partnerAnon,
+          roomId: session.roomId,
+          reason,
+          details,
+          reporterProfile: buildProfileSnapshot(session),
+          reportedProfile: partnerSession ? buildProfileSnapshot(partnerSession) : null,
+        });
+      })(), '[Moderation] Failed to persist report or apply moderation threshold');
+
       console.log('[Socket] report-partner:', {
         reporter: socket.id,
         partner: partnerId,
         roomId: session.roomId,
-        reason: data?.reason || 'unspecified',
+        reason,
         reportsReceived: partnerRep.reportsReceived,
       });
+
+      leaveRoom(socket);
+      socket.emit('partner-left');
 
       socket.emit('action-feedback', { type: 'report', status: 'ok' });
       socket.emit('report-submitted', { ok: true });
@@ -808,7 +974,7 @@ app.prepare().then(() => {
 
       if (!requesterId || !recipientId) return;
 
-      const allowed = await redis.checkRateLimit(`omingle:rate:friend-request:${requesterId}`, 10, 60).catch((error) => {
+      const allowed = await redis.checkRateLimit(`hippichat:rate:friend-request:${requesterId}`, 10, 60).catch((error) => {
         console.error('[Redis] Friend request rate-limit failed:', error?.message || error);
         return true;
       });
@@ -957,6 +1123,7 @@ app.prepare().then(() => {
         const identityId = getIdentityId(session);
         if (identityId) {
           removeOnlineSocket(identityId, socket.id);
+          clearActiveSocket(identityId, socket.id);
           notifyFriendsOnlineStatusChanged(identityId);
         }
       }

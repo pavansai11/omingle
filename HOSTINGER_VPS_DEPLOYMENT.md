@@ -51,8 +51,14 @@ At minimum, set:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `MONGODB_URI` *(recommended)*
-- Azure translator/speech keys
+- `REDIS_URL`
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
 - `CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com`
+- `COTURN_STATIC_AUTH_SECRET`
+- `TURN_HOST=turn.hippichat.com`
+- `TURN_PORT=3478`
+- `TURN_CREDENTIAL_TTL_SECONDS=3600`
 
 ## 6. Build and start with PM2
 

@@ -56,17 +56,21 @@ MONGODB_URI=mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net/HippiChat
 - **Build Command:**
 
 ```bash
-yarn install --frozen-lockfile && yarn build
+YARN_PRODUCTION=false yarn install --frozen-lockfile && yarn build
 ```
 
 - **Start Command:**
 
 ```bash
-yarn start
+NODE_OPTIONS=--max-old-space-size=1536 yarn start
 ```
 
 - **Instance type:** use the cheapest/free option available
 - **Auto Deploy:** enabled
+
+Recommended Node version:
+
+- `20.x`
 
 You can also use the included `render.yaml` blueprint if Render offers the blueprint flow in your account.
 
@@ -83,13 +87,14 @@ GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET=YOUR_GOOGLE_CLIENT_SECRET
 MONGODB_URI=YOUR_MONGODB_URI
 DB_NAME=HippiChat
+REDIS_URL=YOUR_UPSTASH_TCP_REDIS_URL
+UPSTASH_REDIS_REST_URL=YOUR_UPSTASH_REST_URL
+UPSTASH_REDIS_REST_TOKEN=YOUR_UPSTASH_REST_TOKEN
 CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000
-AZURE_TRANSLATOR_KEY=...
-AZURE_TRANSLATOR_ENDPOINT=https://api.cognitive.microsofttranslator.com/
-AZURE_TRANSLATOR_REGION=centralindia
-AZURE_SPEECH_KEY=...
-AZURE_SPEECH_REGION=southeastasia
-AZURE_SPEECH_ENDPOINT=https://southeastasia.api.cognitive.microsoft.com/
+COTURN_STATIC_AUTH_SECRET=YOUR_COTURN_SHARED_SECRET
+TURN_HOST=turn.hippichat.com
+TURN_PORT=3478
+TURN_CREDENTIAL_TTL_SECONDS=3600
 ```
 
 Do **not** commit real secrets to GitHub. Keep them only in Render.
@@ -188,8 +193,14 @@ If you use the free/lowest Render tier:
 - first request may be slow while it wakes up
 
 Also, because matchmaking is in memory:
-- keep it as **single instance only**
-- do not scale horizontally yet
+- keep it as **single instance only** initially
+- validate Redis-backed signaling and room state before scaling horizontally
+
+If Render reports memory pressure on the application instance, keep:
+
+- `NODE_OPTIONS=--max-old-space-size=1536`
+
+This caps Node heap and leaves headroom for websocket/native memory in a 2 GB container.
 
 ---
 

@@ -2,9 +2,9 @@ services:
   - type: web
     name: hippichat
     env: node
-    plan: free
-    buildCommand: yarn install --frozen-lockfile && yarn build
-    startCommand: yarn start
+    plan: standard
+    buildCommand: YARN_PRODUCTION=false yarn install --frozen-lockfile && yarn build
+    startCommand: NODE_OPTIONS=--max-old-space-size=1536 yarn start
     autoDeploy: true
     envVars:
       - key: NODE_ENV
@@ -19,21 +19,23 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
       - key: MONGODB_URI
         sync: false
       - key: DB_NAME
         value: HippiChat
       - key: CORS_ORIGINS
         value: https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000
-      - key: AZURE_TRANSLATOR_KEY
+      - key: COTURN_STATIC_AUTH_SECRET
         sync: false
-      - key: AZURE_TRANSLATOR_ENDPOINT
-        value: https://api.cognitive.microsofttranslator.com/
-      - key: AZURE_TRANSLATOR_REGION
-        value: centralindia
-      - key: AZURE_SPEECH_KEY
-        sync: false
-      - key: AZURE_SPEECH_REGION
-        value: southeastasia
-      - key: AZURE_SPEECH_ENDPOINT
-        value: https://southeastasia.api.cognitive.microsoft.com/
+      - key: TURN_HOST
+        value: turn.hippichat.com
+      - key: TURN_PORT
+        value: 3478
+      - key: TURN_CREDENTIAL_TTL_SECONDS
+        value: 3600

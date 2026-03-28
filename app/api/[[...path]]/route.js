@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { createUserSession, deleteUserSession, getSessionCookieName, getUserSession, updateUserProfile, upsertGoogleUser } from '@/lib/auth-store';
 
@@ -33,61 +34,28 @@ function normalizeLangCode(lang) {
   return lower;
 }
 
-async function microsoftTranslate(text, fromLang, toLang) {
-  const apiKey = process.env.AZURE_TRANSLATOR_KEY;
-  const endpoint = process.env.AZURE_TRANSLATOR_ENDPOINT;
-  const region = process.env.AZURE_TRANSLATOR_REGION;
-
-  if (!apiKey || !endpoint || !region) {
-    throw new Error('Azure Translator is not configured. Missing AZURE_TRANSLATOR_KEY / AZURE_TRANSLATOR_ENDPOINT / AZURE_TRANSLATOR_REGION');
+function getTurnCredentialPayload(identity = 'guest') {
+  const secret = process.env.COTURN_STATIC_AUTH_SECRET;
+  if (!secret) {
+    throw new Error('COTURN_STATIC_AUTH_SECRET is not configured');
   }
 
-  const baseUrl = endpoint.replace(/\/$/, '');
-  const url = `${baseUrl}/translate?api-version=3.0&from=${encodeURIComponent(fromLang)}&to=${encodeURIComponent(toLang)}`;
+  const host = process.env.NEXT_PUBLIC_TURN_HOST || process.env.TURN_HOST || 'turn.hippichat.com';
+  const port = Number(process.env.NEXT_PUBLIC_TURN_PORT || process.env.TURN_PORT || 3478);
+  const ttlSeconds = Number(process.env.TURN_CREDENTIAL_TTL_SECONDS || 3600);
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const username = `${expiresAt}:${identity}`;
+  const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Ocp-Apim-Subscription-Key': apiKey,
-        'Ocp-Apim-Subscription-Region': region,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify([{ Text: text }]),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Azure Translator HTTP ${res.status}: ${errText.slice(0, 300)}`);
-    }
-
-    const data = await res.json();
-    const translated = data?.[0]?.translations?.[0]?.text;
-
-    if (!translated || typeof translated !== 'string') {
-      throw new Error('Azure Translator returned an unexpected response shape');
-    }
-
-    return translated;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function getSpeechTokenUrl() {
-  const speechEndpoint = process.env.AZURE_SPEECH_ENDPOINT;
-  const speechRegion = process.env.AZURE_SPEECH_REGION;
-
-  if (speechEndpoint) {
-    return `${speechEndpoint.replace(/\/$/, '')}/sts/v1.0/issueToken`;
-  }
-
-  if (!speechRegion) return null;
-  return `https://${speechRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`;
+  return {
+    username,
+    credential,
+    ttlSeconds,
+    urls: [
+      `turn:${host}:${port}?transport=udp`,
+      `turn:${host}:${port}?transport=tcp`,
+    ],
+  };
 }
 
 export async function GET(request, { params }) {
@@ -105,6 +73,18 @@ export async function GET(request, { params }) {
       user: session?.user || null,
       authenticated: !!session?.user,
     });
+  }
+
+  if (path === 'turn-credentials') {
+    try {
+      const sessionId = request.cookies.get(getSessionCookieName())?.value;
+      const session = await getUserSession(sessionId);
+      const identity = session?.user?.id || session?.user?.googleId || crypto.randomUUID();
+      return NextResponse.json(getTurnCredentialPayload(identity));
+    } catch (error) {
+      console.error('[TURN] Failed to issue TURN credentials:', error);
+      return NextResponse.json({ error: 'TURN credentials unavailable' }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -216,45 +196,7 @@ export async function POST(request, { params }) {
   }
 
   if (path === 'speech-token') {
-    try {
-      const speechKey = process.env.AZURE_SPEECH_KEY;
-      const speechRegion = process.env.AZURE_SPEECH_REGION;
-      const tokenUrl = getSpeechTokenUrl();
-
-      if (!speechKey || !speechRegion || !tokenUrl) {
-        return NextResponse.json({
-          error: 'Speech service not configured. Missing AZURE_SPEECH_KEY / AZURE_SPEECH_REGION',
-        }, { status: 500 });
-      }
-
-      const res = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: {
-          'Ocp-Apim-Subscription-Key': speechKey,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: '',
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        return NextResponse.json({
-          error: 'Failed to issue speech token',
-          details: errText.slice(0, 200),
-        }, { status: 502 });
-      }
-
-      const token = await res.text();
-
-      return NextResponse.json({
-        token,
-        region: speechRegion,
-        expiresIn: 540,
-      });
-    } catch (error) {
-      console.error('[Speech] Token endpoint error:', error);
-      return NextResponse.json({ error: 'Speech token request failed' }, { status: 500 });
-    }
+    return NextResponse.json({ error: 'Speech services are disabled' }, { status: 501 });
   }
 
   if (path === 'translate') {
@@ -280,25 +222,13 @@ export async function POST(request, { params }) {
         return NextResponse.json({ translatedText: text });
       }
 
-      try {
-        const translatedText = await microsoftTranslate(text, sourceLang, targetLang);
-        return NextResponse.json({
-          translatedText,
-          provider: 'azure-translator',
-          sourceLang,
-          targetLang,
-        });
-      } catch (translationError) {
-        console.error('[Translation] Azure translation failed:', translationError?.message || translationError);
-        // Graceful fallback to preserve chat continuity
-        return NextResponse.json({
-          translatedText: text,
-          fallback: true,
-          provider: 'fallback-original',
-          sourceLang,
-          targetLang,
-        });
-      }
+      return NextResponse.json({
+        translatedText: text,
+        provider: 'disabled-no-azure',
+        fallback: true,
+        sourceLang,
+        targetLang,
+      });
     } catch (error) {
       console.error('Translation error:', error);
       return NextResponse.json({ error: 'Translation failed' }, { status: 500 });
