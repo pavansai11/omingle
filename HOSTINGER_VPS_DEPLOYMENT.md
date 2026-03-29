@@ -31,7 +31,7 @@ npm install -g pm2 yarn
 ```bash
 mkdir -p /var/www
 cd /var/www
-git clone https://github.com/YOUR_GITHUB_USERNAME/HippiChat.git hippichat
+git clone https://github.com/pavansai11/omingle.git hippichat
 cd /var/www/hippichat
 ```
 
@@ -118,6 +118,14 @@ To enable auto-deploy from GitHub, add these GitHub repo secrets:
 - `HOSTINGER_SSH_KEY` → private SSH key
 - `HOSTINGER_PORT` → usually `22`
 - `HOSTINGER_APP_DIR` → `/var/www/hippichat`
+
+Recommended PM2 memory guard for this VPS path:
+
+- `max_memory_restart: 4G`
+
+Recommended runtime:
+
+- `NODE_OPTIONS=--max-old-space-size=4096`
 
 After that, every push to `main` will:
 

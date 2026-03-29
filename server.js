@@ -1,8 +1,13 @@
+const { loadEnvConfig } = require('@next/env');
 const { createServer } = require('http');
 const { parse } = require('url');
 const next = require('next');
 const socialStore = require('./lib/social-store.cjs');
 const redis = require('./lib/upstash-redis.cjs');
+
+// Ensure `.env` is loaded even when PM2/systemd starts `node server.js`
+// directly in production. This avoids relying on shell `source .env` hacks.
+loadEnvConfig(process.cwd());
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOST || '0.0.0.0';

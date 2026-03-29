@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/var/www/omingle}"
+APP_DIR="${APP_DIR:-/var/www/hippichat}"
 BRANCH="${BRANCH:-main}"
 
 if [ ! -d "$APP_DIR/.git" ]; then
