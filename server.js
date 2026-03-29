@@ -119,6 +119,13 @@ app.prepare().then(() => {
     });
   }
 
+  function getLiveSocketIds(identityId) {
+    if (!identityId) return [];
+    const socketSet = onlineUsers.get(identityId);
+    if (!socketSet || typeof socketSet[Symbol.iterator] !== 'function') return [];
+    return [...socketSet].filter((sid) => userSessions.has(sid));
+  }
+
   function logRuntimeStats(label = 'runtime') {
     const memory = process.memoryUsage();
     console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(memory.heapTotal / 1024 / 1024)}MB queue=${waitingQueue.length} rooms=${rooms.size} sessions=${userSessions.size} onlineUsers=${onlineUsers.size} profiles=${userProfiles.size} reputation=${userReputation.size} invites=${pendingFriendInvites.size}`);
@@ -251,8 +258,9 @@ app.prepare().then(() => {
   }
 
   function disconnectUserSockets(identityId, blockPayload) {
-    if (!identityId || !onlineUsers.has(identityId)) return;
-    for (const sid of onlineUsers.get(identityId)) {
+    const socketIds = getLiveSocketIds(identityId);
+    if (!socketIds.length) return;
+    for (const sid of socketIds) {
       io.to(sid).emit('account-blocked', {
         ...blockPayload,
         message: formatBlockMessage(blockPayload),
@@ -262,25 +270,13 @@ app.prepare().then(() => {
   }
 
   async function enforceSingleActiveSocket(identityId, socketId) {
-    if (!identityId || !socketId) return;
-    const key = getActiveSocketKey(identityId);
-    const existingSocketId = await redis.getJson(key).catch(() => null);
-
-    if (existingSocketId && existingSocketId !== socketId) {
-      io.to(existingSocketId).emit('force-logout', { reason: 'signed-in-elsewhere' });
-      io.in(existingSocketId).disconnectSockets(true);
-    }
-
-    await redis.setJson(key, socketId, 60 * 60 * 24 * 7).catch(() => null);
+    // Intentionally relaxed to allow the same authenticated account to use
+    // multiple devices/tabs independently for matching and chatting.
+    return;
   }
 
   async function clearActiveSocket(identityId, socketId) {
-    if (!identityId || !socketId) return;
-    const key = getActiveSocketKey(identityId);
-    const currentSocketId = await redis.getJson(key).catch(() => null);
-    if (currentSocketId === socketId) {
-      await redis.delKey(key).catch(() => null);
-    }
+    return;
   }
 
   function broadcastStats() {
@@ -460,8 +456,9 @@ app.prepare().then(() => {
   }
 
   function getOnlineSocketIdForUser(anonUserId) {
-    if (!anonUserId || !onlineUsers.has(anonUserId)) return null;
-    for (const sid of onlineUsers.get(anonUserId).values()) {
+    const socketIds = getLiveSocketIds(anonUserId);
+    if (!socketIds.length) return null;
+    for (const sid of socketIds) {
       if (userSessions.has(sid)) return sid;
     }
     return null;
@@ -498,26 +495,29 @@ app.prepare().then(() => {
   }
 
   async function emitFriendsStatus(identityId) {
-    if (!identityId || !onlineUsers.has(identityId)) return;
+    if (!identityId) return;
     const payload = await getFriendsPayload(identityId);
-    for (const sid of onlineUsers.get(identityId)) {
+    const socketIds = getLiveSocketIds(identityId);
+    for (const sid of socketIds) {
       io.to(sid).emit('friends-status', { friends: payload });
     }
   }
 
   async function emitFriendRequests(identityId) {
-    if (!identityId || !onlineUsers.has(identityId)) return;
+    if (!identityId) return;
     const incoming = await socialStore.listPendingRequests(identityId);
     const outgoing = await socialStore.listOutgoingRequests(identityId);
-    for (const sid of onlineUsers.get(identityId)) {
+    const socketIds = getLiveSocketIds(identityId);
+    for (const sid of socketIds) {
       io.to(sid).emit('friend-requests', { incoming, outgoing });
     }
   }
 
   async function emitHistory(identityId) {
-    if (!identityId || !onlineUsers.has(identityId)) return;
+    if (!identityId) return;
     const history = await socialStore.listHistory(identityId);
-    for (const sid of onlineUsers.get(identityId)) {
+    const socketIds = getLiveSocketIds(identityId);
+    for (const sid of socketIds) {
       io.to(sid).emit('history-updated', { history });
     }
   }
@@ -580,8 +580,9 @@ app.prepare().then(() => {
     const friends = await socialStore.listFriends(identityId);
     const online = isUserOnline(identityId);
     for (const friend of friends) {
-      if (!onlineUsers.has(friend.friendUserId)) continue;
-      for (const sid of onlineUsers.get(friend.friendUserId)) {
+      const socketIds = getLiveSocketIds(friend.friendUserId);
+      if (!socketIds.length) continue;
+      for (const sid of socketIds) {
         io.to(sid).emit('friend-online-status', {
           friendAnonId: identityId,
           friendUserId: identityId,
@@ -1012,26 +1013,30 @@ app.prepare().then(() => {
 
     socket.on('report-partner', (data) => {
       const session = userSessions.get(socket.id);
-      if (!session || !session.roomId) return;
-      const room = rooms.get(session.roomId);
-      if (!room) return;
+      if (!session) return;
+      const explicitReportedId = data?.targetUserId || null;
+      const effectiveRoomId = session.roomId || data?.roomId || null;
+      const room = effectiveRoomId ? rooms.get(effectiveRoomId) : null;
 
       const actorAnon = getIdentityId(session);
-      const actions = roomActions.get(session.roomId) || { likes: new Set(), reports: new Set() };
+      const actions = effectiveRoomId ? (roomActions.get(effectiveRoomId) || { likes: new Set(), reports: new Set() }) : { likes: new Set(), reports: new Set() };
       const reason = data?.reason || 'other';
       const details = typeof data?.details === 'string' ? data.details : '';
 
-      if (actions.reports.has(actorAnon)) {
+      if (effectiveRoomId && actions.reports.has(actorAnon)) {
         socket.emit('action-feedback', { type: 'report', status: 'duplicate' });
         return;
       }
 
-      actions.reports.add(actorAnon);
-      roomActions.set(session.roomId, actions);
+      if (effectiveRoomId) {
+        actions.reports.add(actorAnon);
+        roomActions.set(effectiveRoomId, actions);
+      }
 
-      const partnerId = getRoomPartnerId(room, socket.id);
-      const partnerSession = userSessions.get(partnerId);
-      const partnerAnon = partnerSession ? getIdentityId(partnerSession) : `guest_${partnerId}`;
+      const partnerId = room ? getRoomPartnerId(room, socket.id) : null;
+      const partnerSession = partnerId ? userSessions.get(partnerId) : null;
+      const partnerAnon = explicitReportedId || (partnerSession ? getIdentityId(partnerSession) : (partnerId ? `guest_${partnerId}` : null));
+      if (!partnerAnon) return;
       const partnerRep = getOrCreateReputation(partnerAnon);
       partnerRep.reportsReceived += 1;
 
@@ -1049,7 +1054,7 @@ app.prepare().then(() => {
         await socialStore.createReport({
           reporterId: actorAnon,
           reportedId: partnerAnon,
-          roomId: session.roomId,
+          roomId: effectiveRoomId,
           reason,
           details,
           reporterProfile: buildProfileSnapshot(session),
@@ -1060,13 +1065,15 @@ app.prepare().then(() => {
       console.log('[Socket] report-partner:', {
         reporter: socket.id,
         partner: partnerId,
-        roomId: session.roomId,
+        roomId: effectiveRoomId,
         reason,
         reportsReceived: partnerRep.reportsReceived,
       });
 
-      leaveRoom(socket);
-      socket.emit('partner-left');
+      if (room && session.roomId) {
+        leaveRoom(socket);
+        socket.emit('partner-left');
+      }
 
       socket.emit('action-feedback', { type: 'report', status: 'ok' });
       socket.emit('report-submitted', { ok: true });
@@ -1111,7 +1118,8 @@ app.prepare().then(() => {
       await refreshSocialViews(requesterId);
       if (onlineUsers.has(recipientId)) {
         await refreshSocialViews(recipientId);
-        for (const sid of onlineUsers.get(recipientId)) {
+        const socketIds = getLiveSocketIds(recipientId);
+        for (const sid of socketIds) {
           io.to(sid).emit('friend-request-received', { fromUserId: requesterId });
         }
       }

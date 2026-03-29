@@ -19,7 +19,7 @@ function generateId() {
 const CAPTION_DEBOUNCE_MS = 700
 const CAPTIONS_UI_ENABLED = false
 const BLUR_FEATURE_ENABLED = false
-const MAX_HISTORY_ITEMS = 20
+const MAX_HISTORY_ITEMS = 10
 const REPORT_REASONS = [
   { value: 'nudity', label: 'Nudity / sexual content' },
   { value: 'harassment', label: 'Harassment / bullying' },
@@ -183,6 +183,7 @@ function ChatPageContent() {
   const [pendingInviteRequestId, setPendingInviteRequestId] = useState(null)
   const [unfriendTarget, setUnfriendTarget] = useState(null)
   const [unfriendConfirmStep, setUnfriendConfirmStep] = useState(1)
+  const [reportContext, setReportContext] = useState({ targetUserId: null, roomId: null, isCurrent: true })
   const [interactionHistory, setInteractionHistory] = useState([])
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] })
   const [sessionUser, setSessionUser] = useState(null)
@@ -216,6 +217,7 @@ function ChatPageContent() {
 
   // Presence stats
   const [onlineCount, setOnlineCount] = useState(null)
+  const [lastOnlineCount, setLastOnlineCount] = useState(null)
   const [interestKeywords, setInterestKeywords] = useState([])
   const [interestInput, setInterestInput] = useState('')
   const [matchedInterests, setMatchedInterests] = useState([])
@@ -267,6 +269,7 @@ function ChatPageContent() {
   )
 
   const incomingRequestsCount = friendRequests.incoming?.length || 0
+  const displayOnlineCount = onlineCount ?? lastOnlineCount
 
   const isSearching = connectionState === 'waiting' || connectionState === 'connecting'
   const isConnected = connectionState === 'connected'
@@ -939,7 +942,10 @@ function ChatPageContent() {
           }
         })
         socket.on('stats', (data) => {
-          if (typeof data?.online === 'number') setOnlineCount(data.online)
+          if (typeof data?.online === 'number') {
+            setOnlineCount(data.online)
+            setLastOnlineCount(data.online)
+          }
         })
         socket.on('queue-status', (data) => {
           console.log('[Socket] Queue status:', data)
@@ -1687,9 +1693,26 @@ function ChatPageContent() {
     socketRef.current.emit('like-partner')
   }
 
+  function openReportModal({ targetUserId = null, roomId = null, isCurrent = true } = {}) {
+    setReportContext({ targetUserId, roomId, isCurrent })
+    setReportModalOpen(true)
+  }
+
   function handleReportPartner() {
-    if (!socketRef.current || !partnerIdRef.current || hasReportedPartner) return
-    socketRef.current.emit('report-partner', { reason: 'user-reported' })
+    if (!socketRef.current) return
+    if (reportContext.isCurrent && (!partnerIdRef.current || hasReportedPartner)) return
+    if (reportContext.isCurrent) {
+      setHasReportedPartner(true)
+    }
+    socketRef.current.emit('report-partner', {
+      reason: reportReason,
+      details: reportDetails,
+      targetUserId: reportContext.targetUserId,
+      roomId: reportContext.roomId,
+    })
+    setReportModalOpen(false)
+    setReportDetails('')
+    setReportContext({ targetUserId: null, roomId: null, isCurrent: true })
   }
 
   function resetSessionUi({ clearMessages = true } = {}) {
@@ -1891,6 +1914,7 @@ function ChatPageContent() {
   }, [interactionHistory, friends])
 
   const primaryActionIsStop = isSearching || isConnected
+  const hasActiveMatch = !!roomId && !!partnerId && (connectionState === 'connected' || connectionState === 'connecting')
   const showMobileCenterPane = !showChat && !!panelTab && (mobilePane === 'history' || mobilePane === 'friends')
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
@@ -1924,23 +1948,21 @@ function ChatPageContent() {
           </button>
 
           <div className="flex items-center justify-end gap-2 min-w-[44px]">
-            {onlineCount !== null && (
-              <>
-                <div className="flex rounded-full border border-gray-800/60 bg-gray-900/85 px-2.5 py-1 text-[11px] text-gray-300 sm:hidden">
-                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                    <span className="w-2 h-2 rounded-full bg-green-400" />
-                    {formatOnlineCount(onlineCount)}
-                  </span>
-                </div>
-                <div className="hidden sm:flex rounded-full border border-gray-800/60 bg-gray-900/85 px-3 py-1.5 text-xs text-gray-300">
-                <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <>
+              <div className="flex shrink-0 rounded-full border border-gray-800/60 bg-gray-900/85 px-2.5 py-1 text-[11px] text-gray-300 sm:hidden">
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                   <span className="w-2 h-2 rounded-full bg-green-400" />
-                  <Users className="w-3.5 h-3.5 text-gray-400" />
-                  Online {formatOnlineCount(onlineCount)}
+                  {displayOnlineCount !== null ? formatOnlineCount(displayOnlineCount) : '...'}
                 </span>
-                </div>
-              </>
-            )}
+              </div>
+              <div className="hidden sm:flex rounded-full border border-gray-800/60 bg-gray-900/85 px-3 py-1.5 text-xs text-gray-300">
+              <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                <span className="w-2 h-2 rounded-full bg-green-400" />
+                <Users className="w-3.5 h-3.5 text-gray-400" />
+                Online {displayOnlineCount !== null ? formatOnlineCount(displayOnlineCount) : '...'}
+              </span>
+              </div>
+            </>
             <GoogleAuthButton compact onUserChange={setSessionUser} onOpenSettings={() => setSettingsOpen(true)} userOverride={sessionUser} />
           </div>
         </div>
@@ -2268,6 +2290,7 @@ function ChatPageContent() {
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
                   onFilters={() => setShowPreferences(true)}
+                  connectionState={hasActiveMatch ? connectionState : 'idle'}
                 />
               </div>
             </div>
@@ -2311,6 +2334,7 @@ function ChatPageContent() {
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
                   onFilters={() => setShowPreferences(true)}
+                  connectionState={hasActiveMatch ? connectionState : 'idle'}
                 />
               </div>
               {/* Hidden audio element for remote stream */}
@@ -2438,8 +2462,8 @@ function ChatPageContent() {
                             </button>
                           )}
                           <button
-                            onClick={() => setReportModalOpen(true)}
-                            disabled={!isCurrent || hasReportedPartner}
+                            onClick={() => openReportModal({ targetUserId, roomId: item.roomId || null, isCurrent: false })}
+                            disabled={!targetUserId}
                             className="rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40"
                           >
                             Report
@@ -2718,6 +2742,7 @@ function ChatPageContent() {
           onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
           onSkip={handleNext}
           onFilters={() => setShowPreferences(true)}
+          connectionState={hasActiveMatch ? connectionState : 'idle'}
         />
 
         <button

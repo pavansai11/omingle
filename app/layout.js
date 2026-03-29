@@ -3,6 +3,14 @@ import './globals.css'
 export const metadata = {
   title: 'HippiChat — Random Video & Voice Chat',
   description: 'Random video and voice chat. Meet strangers worldwide, add friends, and reconnect later on HippiChat.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-96x96.png', sizes: '96x96', type: 'image/png' },
+    ],
+    shortcut: ['/favicon.ico'],
+  },
   openGraph: {
     title: 'HippiChat — Random Video & Voice Chat',
     description: 'Random video and voice chat with friends, history, and reconnects on HippiChat.',
