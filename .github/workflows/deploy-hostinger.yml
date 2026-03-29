@@ -21,4 +21,6 @@ jobs:
           script: |
             export APP_DIR="${{ secrets.HOSTINGER_APP_DIR }}"
             export BRANCH="main"
+            export PM2_APP_NAME="hippichat"
+            export APP_PORT="3000"
             bash "$APP_DIR/scripts/deploy-hostinger.sh"

@@ -135,6 +135,88 @@ After that, every push to `main` will:
 4. `yarn build`
 5. `pm2 startOrReload ecosystem.config.js --env production`
 
+## 11. Optional staging/testing environment on the same VPS
+
+If you want to test a `testing` branch safely without touching prod:
+
+### Cloudflare DNS
+- Add `A testing -> YOUR_VPS_IP`
+- Use `testing.hippichat.com`
+
+### Clone a separate directory
+
+```bash
+mkdir -p /var/www
+cd /var/www
+git clone https://github.com/pavansai11/omingle.git hippichat-testing
+cd /var/www/hippichat-testing
+git checkout testing
+```
+
+### Testing `.env`
+Use a separate `.env` for testing with at least:
+
+- `PORT=3001`
+- `NEXT_PUBLIC_BASE_URL=https://testing.hippichat.com`
+- `DB_NAME=HippiChatTesting`
+- separate Redis/Upstash credentials if possible
+
+### PM2 testing process
+
+```bash
+cd /var/www/hippichat-testing
+PM2_APP_NAME=hippichat-testing PORT=3001 pm2 start ecosystem.config.js --env production
+pm2 save
+```
+
+### Nginx testing host
+
+```bash
+cp deploy/nginx-testing.hippichat.com.conf /etc/nginx/sites-available/testing.hippichat.com
+ln -s /etc/nginx/sites-available/testing.hippichat.com /etc/nginx/sites-enabled/testing.hippichat.com
+nginx -t
+systemctl reload nginx
+certbot --nginx -d testing.hippichat.com
+```
+
+### GitHub Actions for testing branch
+Add repo secret:
+- `HOSTINGER_TESTING_APP_DIR=/var/www/hippichat-testing`
+
+The repo now includes a separate workflow that deploys pushes to `testing` into that directory using:
+- PM2 app name: `hippichat-testing`
+- port: `3001`
+
+## 12. Synthetic 100-user load testing
+
+The repo now includes a socket-based load generator:
+
+```bash
+LOAD_URL=https://testing.hippichat.com \
+LOAD_USERS=100 \
+LOAD_RAMP_MS=150 \
+LOAD_HOLD_MIN_MS=30000 \
+LOAD_HOLD_MAX_MS=90000 \
+LOAD_SKIP_CHANCE=0.35 \
+yarn load:test:sockets
+```
+
+What it does:
+- opens synthetic Socket.IO clients
+- identifies users anonymously
+- joins queue
+- matches pairs
+- holds for a random duration
+- optionally skips and rejoins
+
+This is good for testing:
+- queue stability
+- room creation
+- websocket resilience
+- VPS memory growth
+
+It does **not** fully simulate real WebRTC media bandwidth/TURN load.
+
 ## Notes
 
 - If you only have Hostinger shared hosting, use **Hostinger VPS** or host the app on Railway/Render/Fly and keep DNS on Hostinger.
