@@ -249,6 +249,17 @@ What it tests:
 - match/start/skip transitions
 - frontend + socket + WebRTC handshake behavior
 
+### Important when testing against raw VM IP over HTTP
+If you run Playwright against a raw VPS IP like:
+- `http://72.60.170.97:3001`
+
+the harness now adds Chromium's insecure-origin-as-secure flag automatically so fake media can still work more reliably.
+
+Even so, the best long-term browser test target is still:
+- `https://testing.hippichat.com`
+
+because it behaves more like the real production domain.
+
 Recommended progression:
 - 2 users
 - 10 users

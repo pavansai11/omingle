@@ -31,6 +31,12 @@ const SUMMARY_MS = intFromEnv('SUMMARY_MS', 5000)
 const HEADLESS = boolFromEnv('HEADLESS', true)
 const PAGE_URL = `${BASE_URL}/chat?mode=${encodeURIComponent(MODE)}&lang=${encodeURIComponent(LANG)}`
 const ORIGIN = new URL(BASE_URL).origin
+const MEDIA_WARNING_PATTERNS = [
+  /Camera access is required/i,
+  /Camera\/mic needs HTTPS or localhost/i,
+  /Microphone permission denied/i,
+  /Preview unavailable/i,
+]
 
 const stats = {
   launched: 0,
@@ -40,6 +46,7 @@ const stats = {
   skipActions: 0,
   reconnectNotices: 0,
   pageErrors: 0,
+  mediaWarnings: 0,
 }
 
 let stopRequested = false
@@ -55,17 +62,24 @@ function sleep(ms) {
 
 function logSummary(prefix = 'summary') {
   console.log(
-    `[browser-load:${prefix}] launched=${stats.launched}/${BROWSER_USERS} ready=${stats.pagesReady} matchedTransitions=${stats.matchedTransitions} skipActions=${stats.skipActions} connectionErrors=${stats.connectionErrors} reconnectNotices=${stats.reconnectNotices} pageErrors=${stats.pageErrors}`
+    `[browser-load:${prefix}] launched=${stats.launched}/${BROWSER_USERS} ready=${stats.pagesReady} matchedTransitions=${stats.matchedTransitions} skipActions=${stats.skipActions} connectionErrors=${stats.connectionErrors} reconnectNotices=${stats.reconnectNotices} mediaWarnings=${stats.mediaWarnings} pageErrors=${stats.pageErrors}`
   )
 }
 
 async function ensureStarted(page) {
   const startButton = page.getByRole('button', { name: /^Start$/i }).first()
-  if (await startButton.isVisible().catch(() => false)) {
+  const visible = await startButton.isVisible().catch(() => false)
+  const enabled = visible && await startButton.isEnabled().catch(() => false)
+  if (enabled) {
     await startButton.click().catch(() => {})
     return true
   }
   return false
+}
+
+async function detectMediaWarning(page) {
+  const pageText = await page.locator('body').innerText().catch(() => '')
+  return MEDIA_WARNING_PATTERNS.some((pattern) => pattern.test(pageText))
 }
 
 async function runUser(browser, index) {
@@ -107,6 +121,13 @@ async function runUser(browser, index) {
       inMatch = false
       matchEnteredAt = 0
       holdMs = randomHoldMs()
+      await sleep(1000)
+      continue
+    }
+
+    if (await detectMediaWarning(page)) {
+      stats.mediaWarnings += 1
+      console.warn(`[browser-load:user-${index}] media warning detected on page ${PAGE_URL}`)
       await sleep(1000)
       continue
     }
@@ -157,6 +178,7 @@ async function main() {
       '--allow-file-access-from-files',
       '--disable-features=MediaRouter',
       '--no-sandbox',
+      ...(ORIGIN.startsWith('http://') ? [`--unsafely-treat-insecure-origin-as-secure=${ORIGIN}`] : []),
     ],
   })
 
