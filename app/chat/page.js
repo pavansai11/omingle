@@ -30,6 +30,7 @@ const REPORT_REASONS = [
 ]
 
 const WAITING_MONETAG_ZONE = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || '10799188'
+const TESTING_DISABLE_ADS = process.env.NEXT_PUBLIC_TESTING_DISABLE_ADS === 'true'
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -2217,7 +2218,7 @@ function ChatPageContent() {
                           <div className="mt-5 rounded-full border border-gray-800 bg-gray-950/70 px-3 py-1 text-[11px] text-gray-400">
                             {mode === 'video' ? 'Video chat' : 'Voice chat'} · {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
                           </div>
-                          {connectionState === 'waiting' && (
+                          {connectionState === 'waiting' && !TESTING_DISABLE_ADS && (
                             <MonetagAd
                               zone={WAITING_MONETAG_ZONE}
                               label="Sponsored"
@@ -2272,21 +2273,22 @@ function ChatPageContent() {
                 </div>
               </div>
 
-              <div className="sm:hidden pt-1">
-                <MonetagAd
-                  zone={WAITING_MONETAG_ZONE}
-                  label="Sponsored"
-                  className="w-full"
-                  minHeightClassName="min-h-[120px]"
-                />
-              </div>
+              {!TESTING_DISABLE_ADS && (
+                <div className="sm:hidden pt-1">
+                  <MonetagAd
+                    zone={WAITING_MONETAG_ZONE}
+                    label="Sponsored"
+                    className="w-full"
+                    minHeightClassName="min-h-[120px]"
+                  />
+                </div>
+              )}
 
               <div className="hidden sm:flex justify-center pt-1">
                 <ControlButtons
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
                   isMediaReady={isMediaReady}
-                  connectionState={connectionState}
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
                   onFilters={() => setShowPreferences(true)}
@@ -2317,7 +2319,7 @@ function ChatPageContent() {
                     }} />
                 ))}
               </div>
-              {connectionState === 'waiting' && (
+              {connectionState === 'waiting' && !TESTING_DISABLE_ADS && (
                 <MonetagAd
                   zone={WAITING_MONETAG_ZONE}
                   label="Sponsored"
@@ -2330,7 +2332,6 @@ function ChatPageContent() {
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
                   isMediaReady={isMediaReady}
-                  connectionState={connectionState}
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
                   onFilters={() => setShowPreferences(true)}
@@ -2738,7 +2739,6 @@ function ChatPageContent() {
         <ControlButtons
           primaryActionIsStop={primaryActionIsStop}
           isMediaReady={isMediaReady}
-          connectionState={connectionState}
           onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
           onSkip={handleNext}
           onFilters={() => setShowPreferences(true)}

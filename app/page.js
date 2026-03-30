@@ -15,6 +15,7 @@ const HERO_PHRASES = [
 
 const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 const TESTING_ALLOW_ANON = process.env.NEXT_PUBLIC_TESTING_ALLOW_ANON === 'true'
+const TESTING_DISABLE_ADS = process.env.NEXT_PUBLIC_TESTING_DISABLE_ADS === 'true'
 
 export default function HomePage() {
   const router = useRouter()
@@ -231,13 +232,15 @@ export default function HomePage() {
                 : 'Google sign-in required • Video + voice chat • Friends and history built in'}
             </p>
 
-            <SponsoredLinkCard
-              href={DIRECT_LINK_URL}
-              title="Sponsored offer"
-              description="Explore this sponsored link while we keep HippiChat free to use."
-              cta="Learn more"
-              className="mt-10 w-full max-w-2xl"
-            />
+            {!TESTING_DISABLE_ADS && (
+              <SponsoredLinkCard
+                href={DIRECT_LINK_URL}
+                title="Sponsored offer"
+                description="Explore this sponsored link while we keep HippiChat free to use."
+                cta="Learn more"
+                className="mt-10 w-full max-w-2xl"
+              />
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
