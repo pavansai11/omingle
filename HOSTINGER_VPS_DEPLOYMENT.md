@@ -158,6 +158,7 @@ Use a separate `.env` for testing with at least:
 
 - `PORT=3001`
 - `NEXT_PUBLIC_BASE_URL=https://testing.hippichat.com`
+- `NEXT_PUBLIC_TESTING_ALLOW_ANON=true`
 - `DB_NAME=HippiChatTesting`
 - separate Redis/Upstash credentials if possible
 

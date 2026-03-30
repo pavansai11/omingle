@@ -14,6 +14,7 @@ const HERO_PHRASES = [
 ]
 
 const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
+const TESTING_ALLOW_ANON = process.env.NEXT_PUBLIC_TESTING_ALLOW_ANON === 'true'
 
 export default function HomePage() {
   const router = useRouter()
@@ -31,6 +32,10 @@ export default function HomePage() {
     const others = additional.map((lang) => lang?.code).filter(Boolean).join(',')
     return `/chat?mode=${mode}&lang=${primaryCode}${others ? `&others=${others}` : ''}`
   }, [sessionUser])
+
+  const buildAnonChatUrl = useCallback((mode = 'video') => {
+    return `/chat?mode=${mode}&lang=en-US`
+  }, [])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -67,18 +72,27 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
+    if (TESTING_ALLOW_ANON && !sessionLoading && !sessionUser) {
+      router.replace(buildAnonChatUrl('video'))
+      return
+    }
     if (!sessionLoading && sessionUser) {
       router.replace(buildChatUrlForUser('video', sessionUser))
     }
-  }, [buildChatUrlForUser, router, sessionLoading, sessionUser])
+  }, [buildAnonChatUrl, buildChatUrlForUser, router, sessionLoading, sessionUser])
 
   const allConsented = consent.age && consent.terms && consent.monitoring
 
   const proceedToChat = useCallback((mode, user = sessionUser) => {
+    if (TESTING_ALLOW_ANON && !user) {
+      router.push(buildAnonChatUrl(mode))
+      return
+    }
     router.push(buildChatUrlForUser(mode, user))
-  }, [buildChatUrlForUser, router, sessionUser])
+  }, [buildAnonChatUrl, buildChatUrlForUser, router, sessionUser])
 
   const ensureAuthenticated = useCallback((action) => {
+    if (TESTING_ALLOW_ANON) return true
     if (sessionUser) return true
     setPendingAction(action)
     setShowAuthGate(true)
@@ -158,6 +172,10 @@ export default function HomePage() {
               <div className="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs text-gray-300">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading
               </div>
+            ) : TESTING_ALLOW_ANON ? (
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                Testing mode
+              </div>
             ) : (
               <GoogleAuthButton compact onUserChange={setSessionUser} />
             )}
@@ -208,7 +226,9 @@ export default function HomePage() {
             </button>
 
             <p className="text-sm text-gray-500 mt-4">
-              Google sign-in required • Video + voice chat • Friends and history built in
+              {TESTING_ALLOW_ANON
+                ? 'Testing mode • Anonymous access enabled • Video + voice chat'
+                : 'Google sign-in required • Video + voice chat • Friends and history built in'}
             </p>
 
             <SponsoredLinkCard
