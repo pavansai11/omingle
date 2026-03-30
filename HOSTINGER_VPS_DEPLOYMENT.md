@@ -217,6 +217,45 @@ This is good for testing:
 
 It does **not** fully simulate real WebRTC media bandwidth/TURN load.
 
+## 13. Browser + fake-media WebRTC test
+
+After socket-level testing, you can do a more realistic browser test using Playwright with fake camera/mic.
+
+### Install browser dependency once
+
+```bash
+cd /var/www/hippichat-testing
+yarn install --frozen-lockfile
+npx playwright install chromium
+```
+
+### Run 2–10 browser users first
+
+```bash
+cd /var/www/hippichat-testing
+LOAD_URL=http://72.60.170.97:3001 \
+BROWSER_USERS=10 \
+RAMP_MS=500 \
+HOLD_MIN_MS=30000 \
+HOLD_MAX_MS=90000 \
+SKIP_CHANCE=0.35 \
+TEST_DURATION_MS=120000 \
+yarn load:test:browsers
+```
+
+What it tests:
+- real browser page loads
+- fake media permission flow
+- match/start/skip transitions
+- frontend + socket + WebRTC handshake behavior
+
+Recommended progression:
+- 2 users
+- 10 users
+- 20–30 users
+
+Do **not** jump straight to 100 full browsers on one machine unless you have a strong load generator machine, because then you may end up testing the load generator itself more than the app.
+
 ## Notes
 
 - If you only have Hostinger shared hosting, use **Hostinger VPS** or host the app on Railway/Render/Fly and keep DNS on Hostinger.
