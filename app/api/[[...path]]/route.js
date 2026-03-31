@@ -4,7 +4,7 @@ import { createUserSession, deleteUserSession, getSessionCookieName, getUserSess
 import { getDatabase } from '@/lib/mongodb';
 
 const memoryAdEngagement = new Map();
-const AD_GATE_MIN_MS = 10_000;
+const AD_GATE_MIN_MS = 0;
 const AD_GATE_MAX_MS = 10 * 60 * 1000;
 const ALLOWED_GATE_REASONS = new Set(['skip', 'add-friend', 'filters']);
 

@@ -193,8 +193,6 @@ function ChatPageContent() {
   const [adGateReason, setAdGateReason] = useState(null)
   const [adGateLoading, setAdGateLoading] = useState(false)
   const [adGateNonce, setAdGateNonce] = useState(null)
-  const [adGateMinEligibleAt, setAdGateMinEligibleAt] = useState(null)
-  const [adGateTimeLeftMs, setAdGateTimeLeftMs] = useState(0)
   const [adGateSponsorClicked, setAdGateSponsorClicked] = useState(false)
 
   // Caption state
@@ -294,6 +292,8 @@ function ChatPageContent() {
   const recognitionRef = useRef(null)
   const callTimerRef = useRef(null)
   const chatEndRef = useRef(null)
+  const chatScrollRef = useRef(null)
+  const shouldAutoScrollRef = useRef(true)
   const partnerIdRef = useRef(null)
   const partnerLanguageRef = useRef(null)
   const primaryLanguageRef = useRef(null)
@@ -827,17 +827,6 @@ function ChatPageContent() {
     })
   }
 
-  useEffect(() => {
-    if (!adGateOpen || !adGateMinEligibleAt) return undefined
-    const tick = () => {
-      const next = Math.max(0, new Date(adGateMinEligibleAt).getTime() - Date.now())
-      setAdGateTimeLeftMs(next)
-    }
-    tick()
-    const timer = setInterval(tick, 250)
-    return () => clearInterval(timer)
-  }, [adGateMinEligibleAt, adGateOpen])
-
   async function openAdGateSession(reason) {
     const response = await fetch('/api/ad-engagement', {
       method: 'POST',
@@ -849,26 +838,23 @@ function ChatPageContent() {
       throw new Error(data?.error || 'Unable to open ad gate')
     }
     setAdGateNonce(data?.pendingGate?.nonce || null)
-    setAdGateMinEligibleAt(data?.pendingGate?.minEligibleAt || new Date(Date.now() + 10000).toISOString())
     return data
   }
 
-  function openAdGate(reason, action) {
-    pendingAdActionRef.current = action
-    setAdGateNonce(null)
-    setAdGateMinEligibleAt(null)
-    setAdGateTimeLeftMs(0)
-    setAdGateSponsorClicked(false)
-    setAdGateReason(reason)
-    setAdGateOpen(true)
+  async function openAdGate(reason, action) {
+    setAdGateLoading(true)
     const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
-    if (opened) {
-      setAdGateSponsorClicked(true)
+    if (opened) setAdGateSponsorClicked(true)
+
+    try {
+      const data = await openAdGateSession(reason)
+      await completeAdGate(reason, data?.pendingGate?.nonce || null)
+    } catch (error) {
+      // Allow flow to continue even if ad gate APIs fail.
+    } finally {
+      setAdGateLoading(false)
+      action?.()
     }
-    openAdGateSession(reason).catch(() => {
-      const fallbackMinEligibleAt = new Date(Date.now() + 10_000).toISOString()
-      setAdGateMinEligibleAt(fallbackMinEligibleAt)
-    })
   }
 
   async function completeAdGate(reason, nonce) {
@@ -890,7 +876,6 @@ function ChatPageContent() {
 
   async function handleAdGateContinue() {
     if (adGateLoading) return
-    if (adGateTimeLeftMs > 0) return
     setAdGateLoading(true)
     const reason = adGateReason
     try {
@@ -905,8 +890,6 @@ function ChatPageContent() {
     setAdGateOpen(false)
     setAdGateReason(null)
     setAdGateNonce(null)
-    setAdGateMinEligibleAt(null)
-    setAdGateTimeLeftMs(0)
     setAdGateSponsorClicked(false)
     setAdGateLoading(false)
     action?.()
@@ -917,8 +900,6 @@ function ChatPageContent() {
     setAdGateOpen(false)
     setAdGateReason(null)
     setAdGateNonce(null)
-    setAdGateMinEligibleAt(null)
-    setAdGateTimeLeftMs(0)
     setAdGateSponsorClicked(false)
     pendingAdActionRef.current = null
   }
@@ -1933,7 +1914,8 @@ function ChatPageContent() {
 
   // =================== ACTIONS ===================
   function handleSendMessage() {
-    if (!messageInput.trim() || !socketRef.current) return
+    const canSendNow = connectionState === 'connected' && !!roomIdRef.current && !!partnerIdRef.current
+    if (!canSendNow || !messageInput.trim() || !socketRef.current) return
 
     const msg = {
       id: generateId(),
@@ -2030,6 +2012,8 @@ function ChatPageContent() {
 
   function handleInputChange(e) {
     setMessageInput(e.target.value)
+    const canSendNow = connectionState === 'connected' && !!roomIdRef.current && !!partnerIdRef.current
+    if (!canSendNow) return
     if (e.target.value.length > 0) {
       socketRef.current?.emit('typing')
     } else {
@@ -2037,10 +2021,19 @@ function ChatPageContent() {
     }
   }
 
-  // Auto-scroll chat
+  function handleChatScroll() {
+    const container = chatScrollRef.current
+    if (!container) return
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight
+    shouldAutoScrollRef.current = distanceFromBottom < 80
+  }
+
+  // Auto-scroll chat only when user is near the bottom.
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const container = chatScrollRef.current
+    if (!container || !shouldAutoScrollRef.current) return
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+  }, [messages, isPartnerTyping])
 
   function buildChatUrl(nextMode) {
     const others = additionalLanguages.map(lang => lang.code).join(',')
@@ -2096,6 +2089,7 @@ function ChatPageContent() {
 
   const primaryActionIsStop = isSearching || isConnected
   const hasActiveMatch = !!roomId && !!partnerId && (connectionState === 'connected' || connectionState === 'connecting')
+  const canSendMessages = connectionState === 'connected' && !!roomId && !!partnerId
   const showMobileCenterPane = !showChat && !!panelTab && (mobilePane === 'history' || mobilePane === 'friends')
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
@@ -2297,11 +2291,9 @@ function ChatPageContent() {
               Open Sponsor <ExternalLink className="h-4 w-4" />
             </button>
             <p className="mt-3 text-xs text-gray-500">
-              {adGateTimeLeftMs > 0
-                ? `Continue unlocks in ${Math.ceil(adGateTimeLeftMs / 1000)}s`
-                : adGateSponsorClicked
-                  ? 'Sponsor link opened. You can continue now.'
-                  : 'Open the sponsor link, then continue.'}
+              {adGateSponsorClicked
+                ? 'Sponsor link opened. You can continue now.'
+                : 'Open the sponsor link, then continue.'}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -2312,7 +2304,7 @@ function ChatPageContent() {
               </button>
               <button
                 onClick={handleAdGateContinue}
-                disabled={adGateLoading || adGateTimeLeftMs > 0 || !adGateNonce}
+                disabled={adGateLoading || !adGateNonce}
                 className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {adGateLoading ? 'Loading...' : 'Continue'}
@@ -2532,14 +2524,6 @@ function ChatPageContent() {
                 </div>
               </div>
 
-              <div className="sm:hidden pt-1">
-                <GoogleSponsoredAd
-                  label="Sponsored"
-                  className="w-full"
-                  minHeightClassName="min-h-[120px]"
-                />
-              </div>
-
               <div className="hidden sm:flex justify-center pt-1">
                 <ControlButtons
                   desktop
@@ -2660,7 +2644,6 @@ function ChatPageContent() {
                   </div>
                 ) : (
                   activeHistoryFriendEntries.map(item => {
-                    const isCurrent = item.roomId === roomIdRef.current && connectionState === 'connected'
                     const displayName = item.partnerName || item.displayName || `User ${String(item.partnerUserId || item.id).slice(-4)}`
                     const targetUserId = item.partnerUserId || null
                     const incomingRequest = friendRequests.incoming.find(request => request.requesterId === targetUserId)
@@ -2712,17 +2695,18 @@ function ChatPageContent() {
                             <button
                               onClick={() => handleAddFriend(targetUserId)}
                               disabled={!targetUserId || alreadyFriend || pendingOutgoing}
-                              className="rounded-md bg-emerald-600/20 border border-emerald-500/30 px-2 py-1 text-[11px] font-medium text-emerald-200 disabled:opacity-40"
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-600/20 border border-emerald-500/30 px-2 py-1 text-[11px] font-medium text-emerald-200 disabled:opacity-40"
                             >
-                              {alreadyFriend ? 'Friend Added' : pendingOutgoing ? 'Request Sent' : isCurrent ? 'Add Friend' : 'Send Request'}
+                              <UserPlus className="h-3 w-3" />
+                              {alreadyFriend ? 'Friend Added' : pendingOutgoing ? 'Request Sent' : 'Add Friend'}
                             </button>
                           )}
                           <button
                             onClick={() => openReportModal({ targetUserId, roomId: item.roomId || null, isCurrent: false })}
                             disabled={!targetUserId}
-                            className="rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40"
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40"
                           >
-                            Report
+                            <Flag className="h-3 w-3" /> Report
                           </button>
                           {item.onlineFriend?.online && (
                             <button
@@ -2924,7 +2908,7 @@ function ChatPageContent() {
         {/* Text Chat Sidebar */}
         <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col overflow-hidden bg-gray-900 border-l border-gray-800`}>
           {/* Chat header */}
-          <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
+          <div className="sticky top-0 z-10 px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-gray-400" />
               <span className="text-sm font-medium">Text Chat</span>
@@ -2935,11 +2919,15 @@ function ChatPageContent() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-5 space-y-3">
+          <div
+            ref={chatScrollRef}
+            onScroll={handleChatScroll}
+            className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-5 space-y-3"
+          >
             {messages.length === 0 && (
               <div className="text-center text-gray-500 text-sm mt-8">
                 <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                <p>Send a message to start chatting!</p>
+                <p>{canSendMessages ? 'Send a message to start chatting!' : 'Match with someone to start chatting.'}</p>
               </div>
             )}
             {messages.map((msg) => (
@@ -2974,12 +2962,13 @@ function ChatPageContent() {
                 value={messageInput}
                 onChange={handleInputChange}
                 onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Type a message..."
+                placeholder={canSendMessages ? 'Type a message...' : 'Match with someone to chat'}
+                disabled={!canSendMessages}
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50"
               />
               <button
                 onClick={handleSendMessage}
-                disabled={!messageInput.trim()}
+                disabled={!canSendMessages || !messageInput.trim()}
                 className="p-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-xl transition-all"
               >
                 <Send className="w-4 h-4" />
