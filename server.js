@@ -208,6 +208,15 @@ app.prepare().then(() => {
     return Math.max(0, Date.now() - new Date(entry.joinedAt || Date.now()).getTime());
   }
 
+  function normalizeMode(mode) {
+    return mode === 'voice' ? 'voice' : 'video';
+  }
+
+  function parseMode(mode) {
+    if (mode === 'video' || mode === 'voice') return mode;
+    return null;
+  }
+
   function getActiveSocketKey(identityId) {
     return `hippichat:active-socket:${identityId}`;
   }
@@ -626,12 +635,16 @@ app.prepare().then(() => {
 
   async function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
     const roomId = options.roomId || generateId();
+    const resolvedMode = normalizeMode(options.mode || sessionA.mode || sessionB.mode);
+    if (normalizeMode(sessionA.mode) !== resolvedMode || normalizeMode(sessionB.mode) !== resolvedMode) {
+      return null;
+    }
     const matchedInterests = getMatchedInterests(sessionA.interests || [], sessionB.interests || []);
 
     rooms.set(roomId, {
       user1: socketIdA,
       user2: socketIdB,
-      mode: options.mode || sessionA.mode || sessionB.mode || 'video',
+      mode: resolvedMode,
       startedAt: new Date(),
       viaFriend: !!options.viaFriend,
       matchedInterests,
@@ -657,6 +670,7 @@ app.prepare().then(() => {
       partnerLanguage: sessionB.primaryLanguage,
       partnerCountry: resolveCountryPayload(sessionB.country, userProfiles.get(getIdentityId(sessionB))),
       partnerLikes: repB.likesReceived,
+      mode: resolvedMode,
       commonLanguages,
       matchedInterests,
       isFriendConnection: !!options.viaFriend,
@@ -671,6 +685,7 @@ app.prepare().then(() => {
       partnerLanguage: sessionA.primaryLanguage,
       partnerCountry: resolveCountryPayload(sessionA.country, userProfiles.get(getIdentityId(sessionA))),
       partnerLikes: repA.likesReceived,
+      mode: resolvedMode,
       commonLanguages,
       matchedInterests,
       isFriendConnection: !!options.viaFriend,
@@ -679,7 +694,7 @@ app.prepare().then(() => {
 
     socialStore.recordMatchHistoryForUsers(buildProfileSnapshot(sessionA), buildProfileSnapshot(sessionB), {
       roomId,
-      mode: options.mode || sessionA.mode || sessionB.mode,
+      mode: resolvedMode,
       connectedAt: new Date(),
     }).catch((error) => {
       console.error('[History] Failed to persist match history:', error?.message || error);
@@ -811,7 +826,8 @@ app.prepare().then(() => {
 
     socket.on('join-queue', async (data) => {
       const { primaryLanguage, spokenLanguages, mode, anonUserId, country, interestKeywords } = data;
-      console.log('[Socket] join-queue:', socket.id, mode, primaryLanguage?.code);
+      const requestedMode = normalizeMode(mode);
+      console.log('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
       const authUser = socket.data?.authUser || null
 
       // Clean up any existing room
@@ -822,7 +838,7 @@ app.prepare().then(() => {
         socketId: socket.id,
         primaryLanguage,
         spokenLanguages: spokenLanguages || [],
-        mode: mode || 'video',
+        mode: requestedMode,
         anonUserId: anonUserId || `guest_${socket.id}`,
         userId: authUser?.id || null,
         displayName: authUser?.name || null,
@@ -882,10 +898,32 @@ app.prepare().then(() => {
           waitingQueue.push(session);
           return;
         }
+        if (normalizeMode(matchSession.mode) !== session.mode) {
+          waitingQueue.push(match);
+          waitingQueue.push(session);
+          syncQueueSnapshot();
+          socket.emit('queue-status', {
+            position: waitingQueue.length,
+            queueLength: waitingQueue.length,
+            interests: session.interests,
+          });
+          return;
+        }
 
         const roomId = await emitMatchedPair(match.socketId, matchSession, socket.id, session, {
           mode: session.mode,
         });
+        if (!roomId) {
+          waitingQueue.push(match);
+          waitingQueue.push(session);
+          syncQueueSnapshot();
+          socket.emit('queue-status', {
+            position: waitingQueue.length,
+            queueLength: waitingQueue.length,
+            interests: session.interests,
+          });
+          return;
+        }
 
         console.log('[Socket] Matched:', match.socketId, '<->', socket.id, 'Room:', roomId);
 
@@ -1191,6 +1229,12 @@ app.prepare().then(() => {
 
     socket.on('connect-friend', async (data) => {
       const friendAnonId = data?.friendAnonId;
+      const explicitRequestedMode = parseMode(data?.mode);
+      if (typeof data?.mode !== 'undefined' && !explicitRequestedMode) {
+        socket.emit('friend-connect-result', { ok: false, reason: 'invalid-mode' });
+        return;
+      }
+      const requestedMode = explicitRequestedMode || null;
       const session = userSessions.get(socket.id);
       if (!session || !friendAnonId) return;
       if (!requireAuthenticatedUser(socket, 'friend-connect')) return;
@@ -1231,14 +1275,14 @@ app.prepare().then(() => {
         inviterSocketId: socket.id,
         inviteeUserId: friendAnonId,
         inviteeSocketId: friendSocketId,
-        mode: session.mode || friendSession.mode,
+        mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
         timeout,
       });
 
       io.to(friendSocketId).emit('friend-connect-invite', {
         inviteId,
         fromUserId: myAnon,
-        mode: session.mode || friendSession.mode,
+        mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
         profile: buildProfileSnapshot(session),
       });
       socket.emit('friend-connect-result', { ok: true, pending: true, inviteId });
@@ -1268,6 +1312,9 @@ app.prepare().then(() => {
         io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'offline' });
         return;
       }
+      const inviteMode = normalizeMode(invite.mode);
+      inviterSession.mode = inviteMode;
+      inviteeSession.mode = inviteMode;
 
       leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
       removeFromQueue(invite.inviterSocketId);
@@ -1275,7 +1322,7 @@ app.prepare().then(() => {
       removeFromQueue(socket.id);
 
       const roomId = await emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
-        mode: invite.mode || inviterSession.mode || inviteeSession.mode,
+        mode: inviteMode,
         viaFriend: true,
       });
 

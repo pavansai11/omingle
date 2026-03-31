@@ -30,6 +30,10 @@ const REPORT_REASONS = [
 ]
 
 const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
+const MONETAG_POPUNDER_ZONE = '10809114'
+const MONETAG_POPUNDER_SRC = 'https://al5sm.com/tag.min.js'
+const MONETAG_POPUNDER_SCRIPT_ID = 'monetag-popunder-script'
+const MONETAG_VOICE_SCRIPT_ID = 'monetag-voice-vignette-script'
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -841,10 +845,43 @@ function ChatPageContent() {
     return data
   }
 
+  function loadMonetagScript(scriptId) {
+    if (typeof window === 'undefined') return Promise.resolve(false)
+    const anyLoaded = document.querySelector(`script[src="${MONETAG_POPUNDER_SRC}"][data-zone="${MONETAG_POPUNDER_ZONE}"]`)
+    if (anyLoaded) return Promise.resolve(true)
+    const existing = document.getElementById(scriptId)
+    if (existing) return Promise.resolve(true)
+
+    return new Promise((resolve) => {
+      const script = document.createElement('script')
+      script.id = scriptId
+      script.dataset.zone = MONETAG_POPUNDER_ZONE
+      script.src = MONETAG_POPUNDER_SRC
+      script.async = true
+      script.onload = () => resolve(true)
+      script.onerror = () => resolve(false)
+      ;([document.documentElement, document.body].filter(Boolean).pop() || document.body).appendChild(script)
+    })
+  }
+
+  async function openSponsorWithHybridFallback() {
+    const popunderReady = await loadMonetagScript(MONETAG_POPUNDER_SCRIPT_ID)
+    if (popunderReady) {
+      setAdGateSponsorClicked(true)
+      return true
+    }
+
+    const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
+    if (opened) {
+      setAdGateSponsorClicked(true)
+      return true
+    }
+    return false
+  }
+
   async function openAdGate(reason, action) {
     setAdGateLoading(true)
-    const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
-    if (opened) setAdGateSponsorClicked(true)
+    await openSponsorWithHybridFallback()
 
     try {
       const data = await openAdGateSession(reason)
@@ -927,7 +964,7 @@ function ChatPageContent() {
 
   function handleConnectFriend(friendAnonId) {
     if (!socketRef.current || !friendAnonId) return
-    socketRef.current.emit('connect-friend', { friendAnonId })
+    socketRef.current.emit('connect-friend', { friendAnonId, mode })
     setShowFriendsPanel(false)
   }
 
@@ -1156,6 +1193,35 @@ function ChatPageContent() {
       }
     }
   }, [sessionResolved, sessionUser?.id])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const removeVoiceScript = () => {
+      const existing = document.getElementById(MONETAG_VOICE_SCRIPT_ID)
+      if (existing) {
+        existing.remove()
+      }
+    }
+
+    if (mode !== 'voice') {
+      removeVoiceScript()
+      return undefined
+    }
+
+    const existing = document.getElementById(MONETAG_VOICE_SCRIPT_ID)
+    if (!existing) {
+      const script = document.createElement('script')
+      script.id = MONETAG_VOICE_SCRIPT_ID
+      script.dataset.zone = MONETAG_POPUNDER_ZONE
+      script.src = MONETAG_POPUNDER_SRC
+      script.async = true
+      ;([document.documentElement, document.body].filter(Boolean).pop() || document.body).appendChild(script)
+    }
+
+    return () => {
+      removeVoiceScript()
+    }
+  }, [mode])
 
   useEffect(() => {
     if (!socketConnected || !socketRef.current) return
@@ -1464,6 +1530,19 @@ function ChatPageContent() {
   }
 
   function handleMatched(data) {
+    const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
+    if (matchedMode !== mode) {
+      console.warn('[Match] Mode mismatch detected, recovering queue', { currentMode: mode, matchedMode, roomId: data?.roomId })
+      socketRef.current?.emit('next', { reason: 'mode-mismatch' })
+      resetSessionUi()
+      if (socketRef.current?.connected) {
+        joinQueue()
+      } else {
+        setConnectionState('waiting')
+      }
+      return
+    }
+
     console.log('[Match] Matched!', data)
     setConnectionState('connecting')
     setMobilePane('video')
@@ -2281,10 +2360,7 @@ function ChatPageContent() {
             <button
               type="button"
               onClick={() => {
-                const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
-                if (opened) {
-                  setAdGateSponsorClicked(true)
-                }
+                void openSponsorWithHybridFallback()
               }}
               className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
             >
@@ -2452,13 +2528,6 @@ function ChatPageContent() {
                           <div className="mt-5 rounded-full border border-gray-800 bg-gray-950/70 px-3 py-1 text-[11px] text-gray-400">
                             {mode === 'video' ? 'Video chat' : 'Voice chat'} · {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
                           </div>
-                          {connectionState === 'waiting' && (
-                            <GoogleSponsoredAd
-                              label="Sponsored"
-                              className="mt-5 w-full max-w-sm"
-                              minHeightClassName="min-h-[150px]"
-                            />
-                          )}
                           {mediaWarning && (
                             <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 max-w-sm">
                               {mediaWarning}
@@ -2912,7 +2981,13 @@ function ChatPageContent() {
           <div
             ref={chatScrollRef}
             onScroll={handleChatScroll}
-            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 pb-24 sm:pb-6 space-y-3"
+            onWheelCapture={(event) => {
+              if (event.deltaY < 0) shouldAutoScrollRef.current = false
+            }}
+            onTouchMove={() => {
+              shouldAutoScrollRef.current = false
+            }}
+            className="flex-1 min-h-0 h-0 overflow-y-auto overscroll-contain px-4 py-3 pb-24 sm:pb-6 space-y-3"
           >
             {messages.length === 0 && (
               <div className="text-center text-gray-500 text-sm mt-8">
