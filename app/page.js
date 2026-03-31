@@ -24,6 +24,7 @@ export default function HomePage() {
   const [showAuthGate, setShowAuthGate] = useState(false)
   const [pendingAction, setPendingAction] = useState(null)
   const [phraseIndex, setPhraseIndex] = useState(0)
+  const [pendingAuthResolution, setPendingAuthResolution] = useState(false)
 
   const loadSession = useCallback(async () => {
     const res = await fetch('/api/auth/session', { cache: 'no-store' })
@@ -73,13 +74,25 @@ export default function HomePage() {
 
   const allConsented = consent.age && consent.terms && consent.monitoring
 
+  const handleSessionUserChange = useCallback((nextUser) => {
+    setSessionUser((prev) => {
+      // Guard against stale null updates while waiting for post-login session sync.
+      if (!nextUser && prev?.id && pendingAuthResolution) {
+        return prev
+      }
+      return nextUser
+    })
+  }, [pendingAuthResolution])
+
   const proceedToChat = useCallback((mode, user = sessionUser) => {
     router.push(buildChatUrlForUser(mode, user))
   }, [buildChatUrlForUser, router, sessionUser])
 
   const handleStartChat = useCallback(async (mode) => {
+    setPendingAuthResolution(true)
     if (sessionUser) {
       proceedToChat(mode, sessionUser)
+      setPendingAuthResolution(false)
       return
     }
 
@@ -88,6 +101,7 @@ export default function HomePage() {
       if (freshUser) {
         setSessionUser(freshUser)
         proceedToChat(mode, freshUser)
+        setPendingAuthResolution(false)
         return
       }
     } catch (error) {}
@@ -102,6 +116,7 @@ export default function HomePage() {
     const action = pendingAction
     setPendingAction(null)
     setShowAuthGate(false)
+    setPendingAuthResolution(false)
 
     if (action.type === 'start-flow') {
       setStep('consent')
@@ -112,6 +127,40 @@ export default function HomePage() {
       proceedToChat(action.mode, sessionUser)
     }
   }, [pendingAction, proceedToChat, sessionUser])
+
+  useEffect(() => {
+    if (!pendingAction || pendingAction.type !== 'chat' || !showAuthGate) return undefined
+    if (sessionUser) return undefined
+
+    let cancelled = false
+    let attempts = 0
+    const maxAttempts = 8
+
+    const poll = async () => {
+      if (cancelled) return
+      attempts += 1
+      try {
+        const freshUser = await loadSession()
+        if (cancelled) return
+        if (freshUser) {
+          setSessionUser(freshUser)
+          return
+        }
+      } catch (error) {}
+
+      if (attempts < maxAttempts) {
+        setTimeout(poll, 400)
+      }
+    }
+
+    setPendingAuthResolution(true)
+    poll()
+
+    return () => {
+      cancelled = true
+      setPendingAuthResolution(false)
+    }
+  }, [loadSession, pendingAction, sessionUser, showAuthGate])
 
   const renderAuthGate = () => {
     if (!showAuthGate) return null
@@ -129,7 +178,7 @@ export default function HomePage() {
             Please sign in with your Google account before starting chat.
           </p>
           <div className="flex justify-center">
-            <GoogleAuthButton onUserChange={setSessionUser} />
+            <GoogleAuthButton onUserChange={handleSessionUserChange} />
           </div>
         </div>
       </div>
@@ -157,7 +206,7 @@ export default function HomePage() {
             ) : (
               <GoogleAuthButton
                 compact
-                onUserChange={setSessionUser}
+                onUserChange={handleSessionUserChange}
                 onLogout={() => setSessionUser(null)}
                 userOverride={sessionUser}
               />
