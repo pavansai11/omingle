@@ -44,9 +44,7 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
   }, [onUserChange, user])
 
   useEffect(() => {
-    if (userOverride) {
-      setUser(userOverride)
-    }
+    setUser(userOverride)
   }, [userOverride])
 
   useEffect(() => {

@@ -25,6 +25,12 @@ export default function HomePage() {
   const [pendingAction, setPendingAction] = useState(null)
   const [phraseIndex, setPhraseIndex] = useState(0)
 
+  const loadSession = useCallback(async () => {
+    const res = await fetch('/api/auth/session', { cache: 'no-store' })
+    const data = await res.json()
+    return data?.user || null
+  }, [])
+
   const buildChatUrlForUser = useCallback((mode = 'video', user = sessionUser) => {
     const primaryCode = user?.primaryLanguage?.code || 'en-US'
     const additional = Array.isArray(user?.additionalLanguages) ? user.additionalLanguages : []
@@ -42,12 +48,11 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false
 
-    async function loadSession() {
+    async function initSession() {
       try {
-        const res = await fetch('/api/auth/session', { cache: 'no-store' })
-        const data = await res.json()
+        const user = await loadSession()
         if (!cancelled) {
-          setSessionUser(data?.user || null)
+          setSessionUser(user)
         }
       } catch (e) {
         if (!cancelled) {
@@ -60,11 +65,11 @@ export default function HomePage() {
       }
     }
 
-    loadSession()
+    initSession()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [loadSession])
 
   const allConsented = consent.age && consent.terms && consent.monitoring
 
@@ -72,17 +77,24 @@ export default function HomePage() {
     router.push(buildChatUrlForUser(mode, user))
   }, [buildChatUrlForUser, router, sessionUser])
 
-  const ensureAuthenticated = useCallback((action) => {
-    if (sessionUser) return true
-    setPendingAction(action)
-    setShowAuthGate(true)
-    return false
-  }, [sessionUser])
+  const handleStartChat = useCallback(async (mode) => {
+    if (sessionUser) {
+      proceedToChat(mode, sessionUser)
+      return
+    }
 
-  const handleStartChat = useCallback((mode) => {
-    if (!ensureAuthenticated({ type: 'chat', mode })) return
-    proceedToChat(mode)
-  }, [ensureAuthenticated, proceedToChat])
+    try {
+      const freshUser = await loadSession()
+      if (freshUser) {
+        setSessionUser(freshUser)
+        proceedToChat(mode, freshUser)
+        return
+      }
+    } catch (error) {}
+
+    setPendingAction({ type: 'chat', mode })
+    setShowAuthGate(true)
+  }, [loadSession, proceedToChat, sessionUser])
 
   useEffect(() => {
     if (!sessionUser || !pendingAction) return
@@ -143,7 +155,12 @@ export default function HomePage() {
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading
               </div>
             ) : (
-              <GoogleAuthButton compact onUserChange={setSessionUser} />
+              <GoogleAuthButton
+                compact
+                onUserChange={setSessionUser}
+                onLogout={() => setSessionUser(null)}
+                userOverride={sessionUser}
+              />
             )}
           </nav>
 
@@ -189,7 +206,7 @@ export default function HomePage() {
             />
 
             <button
-              onClick={() => handleStartChat('video')}
+              onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
               className="group px-8 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-lg font-semibold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center gap-3"
             >
