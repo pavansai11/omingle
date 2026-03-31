@@ -297,14 +297,46 @@ app.prepare().then(() => {
     );
   }
 
-  function getOrCreateReputation(anonUserId) {
-    if (!anonUserId) return { likesReceived: 0, reportsReceived: 0 };
-    if (!userReputation.has(anonUserId)) {
-      userReputation.set(anonUserId, { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() });
+  async function getReputationSnapshot(userId) {
+    if (!userId) return { likesReceived: 0, reportsReceived: 0 };
+
+    try {
+      const stored = await socialStore.getUserReputation(userId);
+      const next = {
+        likesReceived: Number(stored?.likesReceived || 0),
+        reportsReceived: Number(stored?.reportsReceived || 0),
+        lastSeen: new Date(),
+      };
+      userReputation.set(userId, next);
+      return next;
+    } catch (error) {
+      const cached = userReputation.get(userId) || { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() };
+      cached.lastSeen = new Date();
+      userReputation.set(userId, cached);
+      return cached;
     }
-    const rep = userReputation.get(anonUserId);
-    rep.lastSeen = new Date();
-    return rep;
+  }
+
+  async function incrementReputation(userId, deltas = {}) {
+    if (!userId) return { likesReceived: 0, reportsReceived: 0 };
+
+    try {
+      const updated = await socialStore.incrementUserReputation(userId, deltas);
+      const next = {
+        likesReceived: Number(updated?.likesReceived || 0),
+        reportsReceived: Number(updated?.reportsReceived || 0),
+        lastSeen: new Date(),
+      };
+      userReputation.set(userId, next);
+      return next;
+    } catch (error) {
+      const cached = userReputation.get(userId) || { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() };
+      cached.likesReceived = Math.max(0, Number(cached.likesReceived || 0) + Number(deltas?.likesReceived || 0));
+      cached.reportsReceived = Math.max(0, Number(cached.reportsReceived || 0) + Number(deltas?.reportsReceived || 0));
+      cached.lastSeen = new Date();
+      userReputation.set(userId, cached);
+      return cached;
+    }
   }
 
   function getRoomPartnerId(room, socketId) {
@@ -592,7 +624,7 @@ app.prepare().then(() => {
     }
   }
 
-  function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
+  async function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
     const roomId = options.roomId || generateId();
     const matchedInterests = getMatchedInterests(sessionA.interests || [], sessionB.interests || []);
 
@@ -613,8 +645,8 @@ app.prepare().then(() => {
     sessionA.roomId = roomId;
     sessionB.roomId = roomId;
 
-    const repA = getOrCreateReputation(getIdentityId(sessionA));
-    const repB = getOrCreateReputation(getIdentityId(sessionB));
+    const repA = await getReputationSnapshot(getIdentityId(sessionA));
+    const repB = await getReputationSnapshot(getIdentityId(sessionB));
     const commonLanguages = getCommonLanguages(sessionA, sessionB);
 
     io.to(socketIdA).emit('matched', {
@@ -758,7 +790,7 @@ app.prepare().then(() => {
       }
 
       addOnlineSocket(identityId, socket.id)
-      getOrCreateReputation(identityId)
+      queueBackground(getReputationSnapshot(identityId), '[Reputation] Failed to load queue reputation')
 
       const storedProfile = {
         userId: identityId,
@@ -815,7 +847,7 @@ app.prepare().then(() => {
         return;
       }
 
-      getOrCreateReputation(identityId);
+      queueBackground(getReputationSnapshot(identityId), '[Reputation] Failed to load session reputation');
       addOnlineSocket(identityId, socket.id);
       const storedProfile = {
         userId: identityId,
@@ -851,7 +883,7 @@ app.prepare().then(() => {
           return;
         }
 
-        const roomId = emitMatchedPair(match.socketId, matchSession, socket.id, session, {
+        const roomId = await emitMatchedPair(match.socketId, matchSession, socket.id, session, {
           mode: session.mode,
         });
 
@@ -978,7 +1010,7 @@ app.prepare().then(() => {
       });
     });
 
-    socket.on('like-partner', () => {
+    socket.on('like-partner', async () => {
       const session = userSessions.get(socket.id);
       if (!session || !session.roomId) return;
       const room = rooms.get(session.roomId);
@@ -1000,8 +1032,7 @@ app.prepare().then(() => {
       if (!partnerSession) return;
 
       const partnerAnon = getIdentityId(partnerSession);
-      const partnerRep = getOrCreateReputation(partnerAnon);
-      partnerRep.likesReceived += 1;
+      const partnerRep = await incrementReputation(partnerAnon, { likesReceived: 1 });
 
       // Update liker's view of partner likes
       socket.emit('partner-likes-updated', { likes: partnerRep.likesReceived });
@@ -1011,7 +1042,7 @@ app.prepare().then(() => {
       socket.emit('action-feedback', { type: 'like', status: 'ok' });
     });
 
-    socket.on('report-partner', (data) => {
+    socket.on('report-partner', async (data) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
       const explicitReportedId = data?.targetUserId || null;
@@ -1037,8 +1068,7 @@ app.prepare().then(() => {
       const partnerSession = partnerId ? userSessions.get(partnerId) : null;
       const partnerAnon = explicitReportedId || (partnerSession ? getIdentityId(partnerSession) : (partnerId ? `guest_${partnerId}` : null));
       if (!partnerAnon) return;
-      const partnerRep = getOrCreateReputation(partnerAnon);
-      partnerRep.reportsReceived += 1;
+      const partnerRep = await incrementReputation(partnerAnon, { reportsReceived: 1 });
 
       queueBackground((async () => {
         const dedupeKey = getReportDedupeKey(actorAnon, partnerAnon);
@@ -1244,7 +1274,7 @@ app.prepare().then(() => {
       leaveRoom(socket);
       removeFromQueue(socket.id);
 
-      const roomId = emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
+      const roomId = await emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
         mode: invite.mode || inviterSession.mode || inviteeSession.mode,
         viaFriend: true,
       });

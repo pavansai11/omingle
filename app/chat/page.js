@@ -2033,7 +2033,7 @@ function ChatPageContent() {
     const container = chatScrollRef.current
     if (!container || !shouldAutoScrollRef.current) return
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
-  }, [messages, isPartnerTyping])
+  }, [messages])
 
   function buildChatUrl(nextMode) {
     const others = additionalLanguages.map(lang => lang.code).join(',')
@@ -2559,15 +2559,13 @@ function ChatPageContent() {
                       }} />
                   ))}
                 </div>
-                {connectionState === 'waiting' && (
-                  <GoogleSponsoredAd
-                    label="Sponsored"
-                    className="mt-8 w-full max-w-sm px-4"
-                    minHeightClassName="min-h-[150px]"
-                  />
-                )}
+                <GoogleSponsoredAd
+                  label="Sponsored"
+                  className="mt-6 w-full max-w-[220px]"
+                  minHeightClassName="min-h-[110px] max-h-[140px]"
+                />
               </div>
-              <div className="hidden sm:flex justify-center w-full pb-4 pt-2 shrink-0">
+              <div className="hidden sm:flex justify-center pt-1 shrink-0">
                 <ControlButtons
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
@@ -2923,7 +2921,7 @@ function ChatPageContent() {
           <div
             ref={chatScrollRef}
             onScroll={handleChatScroll}
-            className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-5 space-y-3"
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 pb-24 sm:pb-6 space-y-3"
           >
             {messages.length === 0 && (
               <div className="text-center text-gray-500 text-sm mt-8">
