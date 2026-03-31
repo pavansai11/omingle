@@ -3,7 +3,7 @@
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
-import MonetagAd from '@/components/monetag-ad'
+import GoogleSponsoredAd from '@/components/google-sponsored-ad'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
@@ -29,17 +29,6 @@ const REPORT_REASONS = [
   { value: 'other', label: 'Other' },
 ]
 
-const NON_VIGNETTE_DEFAULT_ZONE = '10799188'
-const BLOCKED_VIGNETTE_ZONES = new Set(['10800687'])
-function sanitizeMonetagZone(zone) {
-  const normalized = String(zone || '').trim()
-  if (!normalized) return NON_VIGNETTE_DEFAULT_ZONE
-  if (BLOCKED_VIGNETTE_ZONES.has(normalized)) return NON_VIGNETTE_DEFAULT_ZONE
-  return normalized
-}
-const WAITING_MONETAG_ZONE = sanitizeMonetagZone(
-  process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || NON_VIGNETTE_DEFAULT_ZONE
-)
 const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 
 function regionCodeToFlag(regionCode) {
@@ -206,7 +195,6 @@ function ChatPageContent() {
   const [adGateNonce, setAdGateNonce] = useState(null)
   const [adGateMinEligibleAt, setAdGateMinEligibleAt] = useState(null)
   const [adGateTimeLeftMs, setAdGateTimeLeftMs] = useState(0)
-  const [adGateAdLoaded, setAdGateAdLoaded] = useState(false)
   const [adGateSponsorClicked, setAdGateSponsorClicked] = useState(false)
 
   // Caption state
@@ -397,13 +385,6 @@ function ChatPageContent() {
       localStorage.setItem('hippichat_interest_keywords', JSON.stringify(interestKeywords))
     } catch (e) {}
   }, [interestKeywords])
-
-  useEffect(() => {
-    const configuredZone = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || ''
-    if (BLOCKED_VIGNETTE_ZONES.has(String(configuredZone || '').trim())) {
-      console.warn('[Ads] Vignette waiting zone configured in env. Using safe non-vignette zone fallback instead.')
-    }
-  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -877,10 +858,13 @@ function ChatPageContent() {
     setAdGateNonce(null)
     setAdGateMinEligibleAt(null)
     setAdGateTimeLeftMs(0)
-    setAdGateAdLoaded(false)
     setAdGateSponsorClicked(false)
     setAdGateReason(reason)
     setAdGateOpen(true)
+    const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
+    if (opened) {
+      setAdGateSponsorClicked(true)
+    }
     openAdGateSession(reason).catch(() => {
       const fallbackMinEligibleAt = new Date(Date.now() + 10_000).toISOString()
       setAdGateMinEligibleAt(fallbackMinEligibleAt)
@@ -907,7 +891,6 @@ function ChatPageContent() {
   async function handleAdGateContinue() {
     if (adGateLoading) return
     if (adGateTimeLeftMs > 0) return
-    if (!adGateAdLoaded) return
     setAdGateLoading(true)
     const reason = adGateReason
     try {
@@ -924,7 +907,6 @@ function ChatPageContent() {
     setAdGateNonce(null)
     setAdGateMinEligibleAt(null)
     setAdGateTimeLeftMs(0)
-    setAdGateAdLoaded(false)
     setAdGateSponsorClicked(false)
     setAdGateLoading(false)
     action?.()
@@ -937,7 +919,6 @@ function ChatPageContent() {
     setAdGateNonce(null)
     setAdGateMinEligibleAt(null)
     setAdGateTimeLeftMs(0)
-    setAdGateAdLoaded(false)
     setAdGateSponsorClicked(false)
     pendingAdActionRef.current = null
   }
@@ -2303,30 +2284,24 @@ function ChatPageContent() {
                   ? 'View this sponsored step before sending a friend request.'
                   : 'View this sponsored step before applying filters.'}
             </p>
-            <MonetagAd
-              zone={WAITING_MONETAG_ZONE}
-              label="Sponsored"
-              className="mt-5"
-              minHeightClassName="min-h-[140px]"
-              onLoaded={setAdGateAdLoaded}
-            />
-            <a
-              href={DIRECT_LINK_URL}
-              target="_blank"
-              rel="noopener noreferrer nofollow sponsored"
-              onClick={() => setAdGateSponsorClicked(true)}
-              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
+            <button
+              type="button"
+              onClick={() => {
+                const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
+                if (opened) {
+                  setAdGateSponsorClicked(true)
+                }
+              }}
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
             >
               Open Sponsor <ExternalLink className="h-4 w-4" />
-            </a>
+            </button>
             <p className="mt-3 text-xs text-gray-500">
               {adGateTimeLeftMs > 0
                 ? `Continue unlocks in ${Math.ceil(adGateTimeLeftMs / 1000)}s`
-                : adGateAdLoaded
-                  ? 'Sponsored step ready. You can continue now.'
-                  : adGateSponsorClicked
-                    ? 'Sponsor link opened. You can continue now.'
-                    : 'Loading sponsored content...'}
+                : adGateSponsorClicked
+                  ? 'Sponsor link opened. You can continue now.'
+                  : 'Open the sponsor link, then continue.'}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -2337,7 +2312,7 @@ function ChatPageContent() {
               </button>
               <button
                 onClick={handleAdGateContinue}
-                disabled={adGateLoading || adGateTimeLeftMs > 0 || (!adGateAdLoaded && !adGateSponsorClicked) || !adGateNonce}
+                disabled={adGateLoading || adGateTimeLeftMs > 0 || !adGateNonce}
                 className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {adGateLoading ? 'Loading...' : 'Continue'}
@@ -2486,8 +2461,7 @@ function ChatPageContent() {
                             {mode === 'video' ? 'Video chat' : 'Voice chat'} · {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
                           </div>
                           {connectionState === 'waiting' && (
-                            <MonetagAd
-                              zone={WAITING_MONETAG_ZONE}
+                            <GoogleSponsoredAd
                               label="Sponsored"
                               className="mt-5 w-full max-w-sm"
                               minHeightClassName="min-h-[150px]"
@@ -2559,8 +2533,7 @@ function ChatPageContent() {
               </div>
 
               <div className="sm:hidden pt-1">
-                <MonetagAd
-                  zone={WAITING_MONETAG_ZONE}
+                <GoogleSponsoredAd
                   label="Sponsored"
                   className="w-full"
                   minHeightClassName="min-h-[120px]"
@@ -2603,8 +2576,7 @@ function ChatPageContent() {
                 ))}
               </div>
               {connectionState === 'waiting' && (
-                <MonetagAd
-                  zone={WAITING_MONETAG_ZONE}
+                <GoogleSponsoredAd
                   label="Sponsored"
                   className="mt-8 w-full max-w-sm px-4"
                   minHeightClassName="min-h-[150px]"

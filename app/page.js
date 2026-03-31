@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
-import SponsoredLinkCard from '@/components/sponsored-link-card'
+import GoogleSponsoredAd from '@/components/google-sponsored-ad'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
 const HERO_PHRASES = [
@@ -12,8 +12,6 @@ const HERO_PHRASES = [
   { text: 'Add friends', hint: 'Reconnect later' },
   { text: 'Skip fast', hint: 'Move on instantly' },
 ]
-
-const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 
 export default function HomePage() {
   const router = useRouter()
@@ -191,12 +189,10 @@ export default function HomePage() {
               </div>
             </div>
 
-            <SponsoredLinkCard
-              href={DIRECT_LINK_URL}
-              title="Sponsored offer"
-              description="Explore this sponsored link while we keep HippiChat free to use."
-              cta="Learn more"
+            <GoogleSponsoredAd
+              label="Sponsored"
               className="mb-8 w-full max-w-2xl"
+              minHeightClassName="min-h-[128px]"
             />
 
             <button
