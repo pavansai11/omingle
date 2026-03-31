@@ -9,6 +9,7 @@ export default function GoogleSponsoredAd({
   label = 'Sponsored',
   className = '',
   minHeightClassName = 'min-h-[220px]',
+  frameClassName = '',
   adClassName = 'aspect-square',
   adClient = DEFAULT_AD_CLIENT,
   adSlot = DEFAULT_AD_SLOT,
@@ -16,6 +17,10 @@ export default function GoogleSponsoredAd({
 }) {
   const insRef = useRef(null)
   const pushedRef = useRef(false)
+  const safeClassName = typeof className === 'string' ? className : ''
+  const safeMinHeightClass = typeof minHeightClassName === 'string' ? minHeightClassName : ''
+  const safeFrameClass = typeof frameClassName === 'string' ? frameClassName : ''
+  const safeAdClass = typeof adClassName === 'string' ? adClassName : ''
 
   useEffect(() => {
     let cancelled = false
@@ -29,9 +34,15 @@ export default function GoogleSponsoredAd({
         window.adsbygoogle = window.adsbygoogle || []
         window.adsbygoogle.push({})
         pushedRef.current = true
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[GoogleSponsoredAd] push ok', { adSlot, attempts })
+        }
         onLoaded?.(true)
       } catch (error) {
         if (attempts >= 8) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn('[GoogleSponsoredAd] push failed', { adSlot, attempts, error })
+          }
           onLoaded?.(false)
           return
         }
@@ -49,12 +60,12 @@ export default function GoogleSponsoredAd({
   }, [onLoaded])
 
   return (
-    <div className={className}>
+    <div className={safeClassName}>
       <p className="mb-2 text-[11px] uppercase tracking-[0.2em] text-gray-500">{label}</p>
-      <div className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/70 p-3 ${minHeightClassName}`}>
+      <div className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/70 p-3 ${safeMinHeightClass} ${safeFrameClass}`.trim()}>
         <ins
           ref={insRef}
-          className={`adsbygoogle block w-full ${adClassName}`.trim()}
+          className={`adsbygoogle block w-full ${safeAdClass}`.trim()}
           data-ad-client={adClient}
           data-ad-slot={adSlot}
           data-ad-format="auto"

@@ -2123,7 +2123,7 @@ function ChatPageContent() {
 
   // =================== UNIFIED CHAT LAYOUT ===================
   return (
-    <div className="h-[100dvh] min-h-[100dvh] bg-gray-950 flex flex-col overflow-hidden">
+    <div className="h-[100dvh] min-h-[100dvh] max-h-[100dvh] bg-gray-950 flex flex-col overflow-hidden overscroll-none">
       <div className="relative z-30 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between gap-3">
           <button onClick={() => router.push('/')} className="flex items-center">
@@ -2419,9 +2419,9 @@ function ChatPageContent() {
       {/* Main content area */}
       <div className="flex-1 flex relative overflow-hidden flex-col sm:flex-row min-h-0">
         {/* Video / Voice Panel */}
-        <div className={`flex-1 relative ${showChat ? 'hidden sm:block' : showMobileCenterPane ? 'hidden sm:block' : ''}`}>
+        <div className={`flex-1 min-h-0 relative overflow-hidden flex flex-col ${showChat ? 'hidden sm:block' : showMobileCenterPane ? 'hidden sm:block' : ''}`}>
           {mode === 'video' ? (
-            <div className="flex h-full flex-col gap-3 p-3 sm:p-4 pb-2 sm:pb-4">
+            <div className="flex flex-1 min-h-0 flex-col gap-3 p-3 sm:p-4 pb-2 sm:pb-4">
               <div className="grid flex-1 min-h-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex min-h-0 flex-col gap-3">
                   <div className="relative w-full rounded-2xl border border-gray-800 bg-gray-900/60 p-2 sm:p-3 overflow-hidden">
@@ -2524,22 +2524,11 @@ function ChatPageContent() {
                 </div>
               </div>
 
-              <div className="hidden sm:flex justify-center pt-1">
-                <ControlButtons
-                  desktop
-                  primaryActionIsStop={primaryActionIsStop}
-                  isMediaReady={isMediaReady}
-                  onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                  onSkip={handleNext}
-                  onFilters={handleOpenFilters}
-                  connectionState={hasActiveMatch ? connectionState : 'idle'}
-                />
-              </div>
             </div>
           ) : (
             /* Voice mode visualization */
-            <div className="w-full h-full min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 px-4">
-              <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
+            <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 px-4 pb-3">
+              <div className="flex-1 min-h-0 flex flex-col items-center justify-center overflow-hidden gap-4">
                 <div className="w-24 h-24 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center mb-4">
                   <Volume2 className="w-10 h-10 text-violet-400" />
                 </div>
@@ -2561,19 +2550,10 @@ function ChatPageContent() {
                 </div>
                 <GoogleSponsoredAd
                   label="Sponsored"
-                  className="mt-6 w-full max-w-[220px]"
-                  minHeightClassName="min-h-[110px] max-h-[140px]"
-                />
-              </div>
-              <div className="hidden sm:flex justify-center pt-1 shrink-0">
-                <ControlButtons
-                  desktop
-                  primaryActionIsStop={primaryActionIsStop}
-                  isMediaReady={isMediaReady}
-                  onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                  onSkip={handleNext}
-                  onFilters={handleOpenFilters}
-                  connectionState={hasActiveMatch ? connectionState : 'idle'}
+                  className="w-full max-w-[160px] flex justify-center"
+                  minHeightClassName="min-h-[140px]"
+                  frameClassName="h-[140px] w-[140px] max-w-[140px] p-1.5"
+                  adClassName="w-full h-full aspect-square"
                 />
               </div>
               {/* Hidden audio element for remote stream */}
@@ -2623,6 +2603,17 @@ function ChatPageContent() {
             </div>
           )}
 
+          <div className="hidden sm:flex shrink-0 justify-center px-3 pb-4 pt-2">
+            <ControlButtons
+              desktop
+              primaryActionIsStop={primaryActionIsStop}
+              isMediaReady={isMediaReady}
+              onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+              onSkip={handleNext}
+              onFilters={handleOpenFilters}
+              connectionState={hasActiveMatch ? connectionState : 'idle'}
+            />
+          </div>
         </div>
 
         <div className={`${showChat ? 'hidden' : showMobileCenterPane ? 'flex' : 'hidden'} ${panelTab ? 'sm:flex' : 'sm:hidden'} w-full sm:w-72 lg:w-80 min-h-0 flex-col border-t sm:border-t-0 sm:border-l border-gray-800 bg-gray-900/70 backdrop-blur`}>
@@ -2907,7 +2898,7 @@ function ChatPageContent() {
         {/* Text Chat Sidebar */}
         <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col overflow-hidden bg-gray-900 border-l border-gray-800`}>
           {/* Chat header */}
-          <div className="sticky top-0 z-10 px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
+          <div className="shrink-0 px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-gray-400" />
               <span className="text-sm font-medium">Text Chat</span>
@@ -2954,7 +2945,7 @@ function ChatPageContent() {
           </div>
 
           {/* Chat input */}
-          <div className="sticky bottom-0 mt-auto border-t border-gray-800 bg-gray-900 px-3 py-3">
+          <div className="shrink-0 border-t border-gray-800 bg-gray-900 px-3 py-3">
             <div className="flex gap-2">
               <input
                 type="text"
