@@ -5,14 +5,20 @@ import { Loader2, LogOut } from 'lucide-react'
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
 
-export default function GoogleAuthButton({ compact = false, onUserChange, onOpenSettings, onLogout, userOverride = null }) {
+export default function GoogleAuthButton({ compact = false, onUserChange, onOpenSettings, onLogout, userOverride = undefined }) {
   const containerRef = useRef(null)
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const isControlled = userOverride !== undefined
 
   useEffect(() => {
+    if (isControlled) {
+      setLoading(false)
+      return undefined
+    }
+
     let cancelled = false
 
     async function loadSession() {
@@ -37,15 +43,17 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [isControlled])
 
   useEffect(() => {
     onUserChange?.(user)
   }, [onUserChange, user])
 
   useEffect(() => {
-    setUser(userOverride)
-  }, [userOverride])
+    if (!isControlled) return
+    setUser(userOverride ?? null)
+    setLoading(false)
+  }, [isControlled, userOverride])
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID || user || loading || !containerRef.current) return
