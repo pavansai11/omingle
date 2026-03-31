@@ -9,6 +9,7 @@ export default function GoogleSponsoredAd({
   label = 'Sponsored',
   className = '',
   minHeightClassName = 'min-h-[220px]',
+  adClassName = 'aspect-square',
   adClient = DEFAULT_AD_CLIENT,
   adSlot = DEFAULT_AD_SLOT,
   onLoaded,
@@ -53,7 +54,7 @@ export default function GoogleSponsoredAd({
       <div className={`overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/70 p-3 ${minHeightClassName}`}>
         <ins
           ref={insRef}
-          className="adsbygoogle block w-full aspect-square"
+          className={`adsbygoogle block w-full ${adClassName}`.trim()}
           data-ad-client={adClient}
           data-ad-slot={adSlot}
           data-ad-format="auto"

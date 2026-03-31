@@ -223,6 +223,14 @@ export default function HomePage() {
                 </div>
               ))}
             </div>
+
+            <GoogleSponsoredAd
+              label="Sponsored"
+              adSlot="8193616179"
+              adClassName=""
+              className="mt-12 w-full max-w-4xl"
+              minHeightClassName="min-h-[140px]"
+            />
           </main>
         </div>
         {renderAuthGate()}

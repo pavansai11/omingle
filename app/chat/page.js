@@ -2538,35 +2538,36 @@ function ChatPageContent() {
             </div>
           ) : (
             /* Voice mode visualization */
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-gray-950 px-4">
-              <div className="w-24 h-24 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center mb-4">
-                <Volume2 className="w-10 h-10 text-violet-400" />
-              </div>
-              {partnerDisplayCountry && (
-                <div className="text-center">
-                  <span className="text-3xl">{partnerDisplayCountry.countryFlag}</span>
-                  <p className="text-lg font-medium mt-2">{partnerDisplayCountry.countryName}</p>
-                  <p className="text-sm text-gray-500">Stranger</p>
+            <div className="w-full h-full min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 px-4">
+              <div className="flex-1 min-h-0 flex flex-col items-center justify-center">
+                <div className="w-24 h-24 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center mb-4">
+                  <Volume2 className="w-10 h-10 text-violet-400" />
                 </div>
-              )}
-              {/* Audio bars animation */}
-              <div className="flex items-end gap-1 mt-6 h-12">
-                {[1,2,3,4,5,6,7].map(i => (
-                  <div key={i} className="w-1.5 bg-violet-500/60 rounded-full"
-                    style={{
-                      height: connectionState === 'connected' ? `${12 + Math.random() * 28}px` : '4px',
-                      animation: connectionState === 'connected' ? `wave ${0.5 + i * 0.1}s ease-in-out infinite alternate` : 'none',
-                    }} />
-                ))}
+                {partnerDisplayCountry && (
+                  <div className="text-center">
+                    <span className="text-3xl">{partnerDisplayCountry.countryFlag}</span>
+                    <p className="text-lg font-medium mt-2">{partnerDisplayCountry.countryName}</p>
+                    <p className="text-sm text-gray-500">Stranger</p>
+                  </div>
+                )}
+                <div className="flex items-end gap-1 mt-6 h-12">
+                  {[1,2,3,4,5,6,7].map(i => (
+                    <div key={i} className="w-1.5 bg-violet-500/60 rounded-full"
+                      style={{
+                        height: connectionState === 'connected' ? `${12 + Math.random() * 28}px` : '4px',
+                        animation: connectionState === 'connected' ? `wave ${0.5 + i * 0.1}s ease-in-out infinite alternate` : 'none',
+                      }} />
+                  ))}
+                </div>
+                {connectionState === 'waiting' && (
+                  <GoogleSponsoredAd
+                    label="Sponsored"
+                    className="mt-8 w-full max-w-sm px-4"
+                    minHeightClassName="min-h-[150px]"
+                  />
+                )}
               </div>
-              {connectionState === 'waiting' && (
-                <GoogleSponsoredAd
-                  label="Sponsored"
-                  className="mt-8 w-full max-w-sm px-4"
-                  minHeightClassName="min-h-[150px]"
-                />
-              )}
-              <div className="hidden sm:flex justify-center mt-8 w-full">
+              <div className="hidden sm:flex justify-center w-full pb-4 pt-2 shrink-0">
                 <ControlButtons
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
@@ -2979,7 +2980,7 @@ function ChatPageContent() {
       </div>
 
       {/* Mobile Control Bar */}
-      <div className="relative bg-gray-900 border-t border-gray-800 px-3 py-4 sm:hidden">
+      <div className="sticky bottom-0 z-20 bg-gray-900 border-t border-gray-800 px-3 py-4 sm:hidden">
         <ControlButtons
           primaryActionIsStop={primaryActionIsStop}
           isMediaReady={isMediaReady}
