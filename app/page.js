@@ -66,12 +66,6 @@ export default function HomePage() {
     }
   }, [])
 
-  useEffect(() => {
-    if (!sessionLoading && sessionUser) {
-      router.replace(buildChatUrlForUser('video', sessionUser))
-    }
-  }, [buildChatUrlForUser, router, sessionLoading, sessionUser])
-
   const allConsented = consent.age && consent.terms && consent.monitoring
 
   const proceedToChat = useCallback((mode, user = sessionUser) => {
@@ -125,16 +119,6 @@ export default function HomePage() {
           <div className="flex justify-center">
             <GoogleAuthButton onUserChange={setSessionUser} />
           </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!sessionLoading && sessionUser) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-        <div className="inline-flex items-center gap-3 rounded-full border border-gray-800 bg-gray-900/80 px-4 py-3 text-sm text-gray-300">
-          <Loader2 className="w-4 h-4 animate-spin" /> Redirecting to chat...
         </div>
       </div>
     )
@@ -205,10 +189,8 @@ export default function HomePage() {
             />
 
             <button
-              onClick={() => {
-                if (!ensureAuthenticated({ type: 'start-flow' })) return
-                setStep('consent')
-              }}
+              onClick={() => handleStartChat('video')}
+              disabled={sessionLoading}
               className="group px-8 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-lg font-semibold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center gap-3"
             >
               Start Chatting
