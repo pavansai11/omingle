@@ -4,6 +4,9 @@ import { createUserSession, deleteUserSession, getSessionCookieName, getUserSess
 import { getDatabase } from '@/lib/mongodb';
 
 const memoryAdEngagement = new Map();
+const AD_GATE_MIN_MS = 10_000;
+const AD_GATE_MAX_MS = 10 * 60 * 1000;
+const ALLOWED_GATE_REASONS = new Set(['skip', 'add-friend', 'filters']);
 
 async function resolveAuthenticatedUser(request) {
   const sessionId = request.cookies.get(getSessionCookieName())?.value;
@@ -16,7 +19,7 @@ async function getAdEngagementForUser(userId) {
   const db = await getDatabase();
 
   if (!db) {
-    const existing = memoryAdEngagement.get(userId) || { skipCount: 0, lastUpdatedAt: new Date().toISOString() };
+    const existing = memoryAdEngagement.get(userId) || { skipCount: 0, lastUpdatedAt: new Date().toISOString(), pendingGate: null };
     memoryAdEngagement.set(userId, existing);
     return existing;
   }
@@ -24,9 +27,19 @@ async function getAdEngagementForUser(userId) {
   const users = db.collection('users');
   const user = await users.findOne({ $or: [{ userId }, { googleId: userId }] }, { projection: { adEngagement: 1 } });
   const current = user?.adEngagement || { skipCount: 0 };
+  const pendingGate = current?.pendingGate || null;
   return {
     skipCount: Number.isFinite(current.skipCount) ? Number(current.skipCount) : 0,
     lastUpdatedAt: current.lastUpdatedAt || new Date().toISOString(),
+    pendingGate: pendingGate && pendingGate?.nonce
+      ? {
+          reason: pendingGate.reason || null,
+          nonce: pendingGate.nonce,
+          gateOpenedAt: pendingGate.gateOpenedAt || null,
+          minEligibleAt: pendingGate.minEligibleAt || null,
+          expiresAt: pendingGate.expiresAt || null,
+        }
+      : null,
   };
 }
 
@@ -35,6 +48,15 @@ async function setAdEngagementForUser(userId, engagement) {
   const sanitized = {
     skipCount: Math.max(0, Number(engagement?.skipCount || 0)),
     lastUpdatedAt: new Date().toISOString(),
+    pendingGate: engagement?.pendingGate?.nonce
+      ? {
+          reason: String(engagement.pendingGate.reason || ''),
+          nonce: String(engagement.pendingGate.nonce),
+          gateOpenedAt: String(engagement.pendingGate.gateOpenedAt || new Date().toISOString()),
+          minEligibleAt: String(engagement.pendingGate.minEligibleAt || new Date(Date.now() + AD_GATE_MIN_MS).toISOString()),
+          expiresAt: String(engagement.pendingGate.expiresAt || new Date(Date.now() + AD_GATE_MAX_MS).toISOString()),
+        }
+      : null,
   };
 
   const db = await getDatabase();
@@ -146,6 +168,7 @@ export async function GET(request, { params }) {
       skipCount: engagement?.skipCount || 0,
       shouldGateOnNextSkip: (engagement?.skipCount || 0) >= 9,
       updatedAt: engagement?.lastUpdatedAt || null,
+      pendingGate: engagement?.pendingGate || null,
     });
   }
 
@@ -278,10 +301,39 @@ export async function POST(request, { params }) {
     const engagement = await getAdEngagementForUser(user.id);
     const currentSkipCount = engagement?.skipCount || 0;
 
+    if (action === 'open-gate') {
+      const reason = String(payload?.reason || '');
+      if (!ALLOWED_GATE_REASONS.has(reason)) {
+        return NextResponse.json({ error: 'Unsupported gate reason' }, { status: 400 });
+      }
+
+      const now = Date.now();
+      const pendingGate = {
+        reason,
+        nonce: crypto.randomUUID(),
+        gateOpenedAt: new Date(now).toISOString(),
+        minEligibleAt: new Date(now + AD_GATE_MIN_MS).toISOString(),
+        expiresAt: new Date(now + AD_GATE_MAX_MS).toISOString(),
+      };
+
+      const saved = await setAdEngagementForUser(user.id, {
+        skipCount: currentSkipCount,
+        pendingGate,
+      });
+      return NextResponse.json({
+        ok: true,
+        pendingGate: saved.pendingGate,
+        serverNow: new Date().toISOString(),
+      });
+    }
+
     if (action === 'skip-attempt') {
       const nextSkipCount = currentSkipCount + 1;
       const shouldGate = nextSkipCount % 10 === 0;
-      const saved = await setAdEngagementForUser(user.id, { skipCount: nextSkipCount });
+      const saved = await setAdEngagementForUser(user.id, {
+        skipCount: nextSkipCount,
+        pendingGate: engagement?.pendingGate || null,
+      });
       return NextResponse.json({
         skipCount: saved.skipCount,
         shouldGate,
@@ -289,9 +341,35 @@ export async function POST(request, { params }) {
     }
 
     if (action === 'complete-gate') {
-      const reason = payload?.reason || 'unknown';
+      const reason = String(payload?.reason || 'unknown');
+      const nonce = String(payload?.nonce || '');
+      const pendingGate = engagement?.pendingGate || null;
+      if (!pendingGate?.nonce) {
+        return NextResponse.json({ error: 'No pending gate' }, { status: 400 });
+      }
+      if (pendingGate.nonce !== nonce || pendingGate.reason !== reason) {
+        return NextResponse.json({ error: 'Invalid gate token' }, { status: 403 });
+      }
+
+      const now = Date.now();
+      const minEligibleAt = new Date(pendingGate.minEligibleAt).getTime();
+      const expiresAt = new Date(pendingGate.expiresAt).getTime();
+      if (Number.isFinite(expiresAt) && now > expiresAt) {
+        const cleared = await setAdEngagementForUser(user.id, {
+          skipCount: currentSkipCount,
+          pendingGate: null,
+        });
+        return NextResponse.json({ error: 'Gate expired', skipCount: cleared.skipCount }, { status: 410 });
+      }
+      if (Number.isFinite(minEligibleAt) && now < minEligibleAt) {
+        return NextResponse.json({ error: 'Gate not eligible yet', retryAfterMs: minEligibleAt - now }, { status: 403 });
+      }
+
       const nextSkipCount = reason === 'skip' ? 0 : currentSkipCount;
-      const saved = await setAdEngagementForUser(user.id, { skipCount: nextSkipCount });
+      const saved = await setAdEngagementForUser(user.id, {
+        skipCount: nextSkipCount,
+        pendingGate: null,
+      });
       return NextResponse.json({
         ok: true,
         reason,

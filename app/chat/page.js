@@ -29,7 +29,17 @@ const REPORT_REASONS = [
   { value: 'other', label: 'Other' },
 ]
 
-const WAITING_MONETAG_ZONE = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || '10799188'
+const NON_VIGNETTE_DEFAULT_ZONE = '10799188'
+const BLOCKED_VIGNETTE_ZONES = new Set(['10800687'])
+function sanitizeMonetagZone(zone) {
+  const normalized = String(zone || '').trim()
+  if (!normalized) return NON_VIGNETTE_DEFAULT_ZONE
+  if (BLOCKED_VIGNETTE_ZONES.has(normalized)) return NON_VIGNETTE_DEFAULT_ZONE
+  return normalized
+}
+const WAITING_MONETAG_ZONE = sanitizeMonetagZone(
+  process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || NON_VIGNETTE_DEFAULT_ZONE
+)
 const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 
 function regionCodeToFlag(regionCode) {
@@ -193,6 +203,11 @@ function ChatPageContent() {
   const [adGateOpen, setAdGateOpen] = useState(false)
   const [adGateReason, setAdGateReason] = useState(null)
   const [adGateLoading, setAdGateLoading] = useState(false)
+  const [adGateNonce, setAdGateNonce] = useState(null)
+  const [adGateMinEligibleAt, setAdGateMinEligibleAt] = useState(null)
+  const [adGateTimeLeftMs, setAdGateTimeLeftMs] = useState(0)
+  const [adGateAdLoaded, setAdGateAdLoaded] = useState(false)
+  const [adGateSponsorClicked, setAdGateSponsorClicked] = useState(false)
 
   // Caption state
   const [myTranscript, setMyTranscript] = useState('')
@@ -382,6 +397,13 @@ function ChatPageContent() {
       localStorage.setItem('hippichat_interest_keywords', JSON.stringify(interestKeywords))
     } catch (e) {}
   }, [interestKeywords])
+
+  useEffect(() => {
+    const configuredZone = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || ''
+    if (BLOCKED_VIGNETTE_ZONES.has(String(configuredZone || '').trim())) {
+      console.warn('[Ads] Vignette waiting zone configured in env. Using safe non-vignette zone fallback instead.')
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -824,37 +846,86 @@ function ChatPageContent() {
     })
   }
 
-  function openAdGate(reason, action) {
-    pendingAdActionRef.current = action
-    setAdGateReason(reason)
-    setAdGateOpen(true)
+  useEffect(() => {
+    if (!adGateOpen || !adGateMinEligibleAt) return undefined
+    const tick = () => {
+      const next = Math.max(0, new Date(adGateMinEligibleAt).getTime() - Date.now())
+      setAdGateTimeLeftMs(next)
+    }
+    tick()
+    const timer = setInterval(tick, 250)
+    return () => clearInterval(timer)
+  }, [adGateMinEligibleAt, adGateOpen])
+
+  async function openAdGateSession(reason) {
+    const response = await fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'open-gate', reason }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data?.error || 'Unable to open ad gate')
+    }
+    setAdGateNonce(data?.pendingGate?.nonce || null)
+    setAdGateMinEligibleAt(data?.pendingGate?.minEligibleAt || new Date(Date.now() + 10000).toISOString())
+    return data
   }
 
-  async function completeAdGate(reason) {
-    try {
-      const res = await fetch('/api/ad-engagement', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'complete-gate', reason }),
-      })
-      const data = await res.json()
-      setAdEngagement((prev) => ({
-        ...prev,
-        skipCount: Number(data?.skipCount || 0),
-        shouldGateOnNextSkip: Number(data?.skipCount || 0) >= 9,
-      }))
-    } catch (error) {}
+  function openAdGate(reason, action) {
+    pendingAdActionRef.current = action
+    setAdGateNonce(null)
+    setAdGateMinEligibleAt(null)
+    setAdGateTimeLeftMs(0)
+    setAdGateAdLoaded(false)
+    setAdGateSponsorClicked(false)
+    setAdGateReason(reason)
+    setAdGateOpen(true)
+    openAdGateSession(reason).catch(() => {
+      const fallbackMinEligibleAt = new Date(Date.now() + 10_000).toISOString()
+      setAdGateMinEligibleAt(fallbackMinEligibleAt)
+    })
+  }
+
+  async function completeAdGate(reason, nonce) {
+    const res = await fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'complete-gate', reason, nonce }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error || 'Unable to complete ad gate')
+    }
+    setAdEngagement((prev) => ({
+      ...prev,
+      skipCount: Number(data?.skipCount || 0),
+      shouldGateOnNextSkip: Number(data?.skipCount || 0) >= 9,
+    }))
   }
 
   async function handleAdGateContinue() {
     if (adGateLoading) return
+    if (adGateTimeLeftMs > 0) return
+    if (!adGateAdLoaded) return
     setAdGateLoading(true)
     const reason = adGateReason
-    await completeAdGate(reason)
+    try {
+      await completeAdGate(reason, adGateNonce)
+    } catch (error) {
+      setAdGateLoading(false)
+      showActionFeedback('Please wait for the sponsored step to finish')
+      return
+    }
     const action = pendingAdActionRef.current
     pendingAdActionRef.current = null
     setAdGateOpen(false)
     setAdGateReason(null)
+    setAdGateNonce(null)
+    setAdGateMinEligibleAt(null)
+    setAdGateTimeLeftMs(0)
+    setAdGateAdLoaded(false)
+    setAdGateSponsorClicked(false)
     setAdGateLoading(false)
     action?.()
   }
@@ -863,6 +934,11 @@ function ChatPageContent() {
     if (adGateLoading) return
     setAdGateOpen(false)
     setAdGateReason(null)
+    setAdGateNonce(null)
+    setAdGateMinEligibleAt(null)
+    setAdGateTimeLeftMs(0)
+    setAdGateAdLoaded(false)
+    setAdGateSponsorClicked(false)
     pendingAdActionRef.current = null
   }
 
@@ -988,9 +1064,9 @@ function ChatPageContent() {
         })
         socket.on('received-like', (data) => {
           if (typeof data?.totalLikes === 'number') {
-            showActionFeedback(`You got a thumbs up 👍 · Total ${data.totalLikes}`)
+            showActionFeedback(`You got a like 👍 · Total ${data.totalLikes}`)
           } else {
-            showActionFeedback('You got a thumbs up 👍')
+            showActionFeedback('You got a like 👍')
           }
         })
         socket.on('action-feedback', (data) => {
@@ -999,7 +1075,7 @@ function ChatPageContent() {
             if (data.status === 'ok' || data.status === 'duplicate') {
               setHasLikedPartner(true)
             }
-            showActionFeedback(data.status === 'duplicate' ? 'You already liked this user' : 'Thumbs up sent 👍')
+            showActionFeedback(data.status === 'duplicate' ? 'You already liked this user' : 'Like sent 👍')
           }
 
           if (data.type === 'report') {
@@ -2232,15 +2308,26 @@ function ChatPageContent() {
               label="Sponsored"
               className="mt-5"
               minHeightClassName="min-h-[140px]"
+              onLoaded={setAdGateAdLoaded}
             />
             <a
               href={DIRECT_LINK_URL}
               target="_blank"
               rel="noopener noreferrer nofollow sponsored"
+              onClick={() => setAdGateSponsorClicked(true)}
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
             >
               Open Sponsor <ExternalLink className="h-4 w-4" />
             </a>
+            <p className="mt-3 text-xs text-gray-500">
+              {adGateTimeLeftMs > 0
+                ? `Continue unlocks in ${Math.ceil(adGateTimeLeftMs / 1000)}s`
+                : adGateAdLoaded
+                  ? 'Sponsored step ready. You can continue now.'
+                  : adGateSponsorClicked
+                    ? 'Sponsor link opened. You can continue now.'
+                    : 'Loading sponsored content...'}
+            </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={closeAdGate}
@@ -2250,7 +2337,7 @@ function ChatPageContent() {
               </button>
               <button
                 onClick={handleAdGateContinue}
-                disabled={adGateLoading}
+                disabled={adGateLoading || adGateTimeLeftMs > 0 || (!adGateAdLoaded && !adGateSponsorClicked) || !adGateNonce}
                 className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {adGateLoading ? 'Loading...' : 'Continue'}
@@ -2422,7 +2509,7 @@ function ChatPageContent() {
                         disabled={hasLikedPartner}
                         className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/15 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <ThumbsUp className="h-4 w-4" /> {hasLikedPartner ? 'Liked' : 'Thumbs Up'}
+                        <ThumbsUp className="h-4 w-4" /> {hasLikedPartner ? 'Liked' : 'Like'}
                       </button>
                       <button
                         onClick={() => openReportModal()}
@@ -2562,7 +2649,7 @@ function ChatPageContent() {
 
           {/* Partner country badge */}
           {partnerDisplayCountry && connectionState === 'connected' && (
-            <div className="absolute right-4 top-4 flex items-center gap-2 rounded-lg bg-gray-900/80 px-3 py-1.5 backdrop-blur z-10">
+            <div className="absolute left-4 top-4 flex items-center gap-2 rounded-lg bg-gray-900/80 px-3 py-1.5 backdrop-blur z-10">
               <span className="text-sm">{partnerDisplayCountry.countryFlag}</span>
               <span className="text-xs font-medium">{partnerDisplayCountry.countryName}</span>
               <span className="ml-1 flex items-center gap-1 text-xs text-emerald-300">
@@ -2876,7 +2963,7 @@ function ChatPageContent() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-5 space-y-3">
             {messages.length === 0 && (
               <div className="text-center text-gray-500 text-sm mt-8">
                 <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
@@ -2908,7 +2995,7 @@ function ChatPageContent() {
           </div>
 
           {/* Chat input */}
-          <div className="mt-auto border-t border-gray-800 bg-gray-900 px-3 py-3">
+          <div className="sticky bottom-0 mt-auto border-t border-gray-800 bg-gray-900 px-3 py-3">
             <div className="flex gap-2">
               <input
                 type="text"
