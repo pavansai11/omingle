@@ -1,6 +1,55 @@
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { createUserSession, deleteUserSession, getSessionCookieName, getUserSession, updateUserProfile, upsertGoogleUser } from '@/lib/auth-store';
+import { getDatabase } from '@/lib/mongodb';
+
+const memoryAdEngagement = new Map();
+
+async function resolveAuthenticatedUser(request) {
+  const sessionId = request.cookies.get(getSessionCookieName())?.value;
+  const session = await getUserSession(sessionId);
+  return session?.user || null;
+}
+
+async function getAdEngagementForUser(userId) {
+  if (!userId) return null;
+  const db = await getDatabase();
+
+  if (!db) {
+    const existing = memoryAdEngagement.get(userId) || { skipCount: 0, lastUpdatedAt: new Date().toISOString() };
+    memoryAdEngagement.set(userId, existing);
+    return existing;
+  }
+
+  const users = db.collection('users');
+  const user = await users.findOne({ $or: [{ userId }, { googleId: userId }] }, { projection: { adEngagement: 1 } });
+  const current = user?.adEngagement || { skipCount: 0 };
+  return {
+    skipCount: Number.isFinite(current.skipCount) ? Number(current.skipCount) : 0,
+    lastUpdatedAt: current.lastUpdatedAt || new Date().toISOString(),
+  };
+}
+
+async function setAdEngagementForUser(userId, engagement) {
+  if (!userId) return null;
+  const sanitized = {
+    skipCount: Math.max(0, Number(engagement?.skipCount || 0)),
+    lastUpdatedAt: new Date().toISOString(),
+  };
+
+  const db = await getDatabase();
+  if (!db) {
+    memoryAdEngagement.set(userId, sanitized);
+    return sanitized;
+  }
+
+  const users = db.collection('users');
+  await users.updateOne(
+    { $or: [{ userId }, { googleId: userId }] },
+    { $set: { adEngagement: sanitized, updatedAt: new Date() } }
+  );
+  return sanitized;
+}
 
 function normalizeLangCode(lang) {
   if (!lang || typeof lang !== 'string') return '';
@@ -85,6 +134,19 @@ export async function GET(request, { params }) {
       console.error('[TURN] Failed to issue TURN credentials:', error);
       return NextResponse.json({ error: 'TURN credentials unavailable' }, { status: 500 });
     }
+  }
+
+  if (path === 'ad-engagement') {
+    const user = await resolveAuthenticatedUser(request);
+    if (!user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const engagement = await getAdEngagementForUser(user.id);
+    return NextResponse.json({
+      skipCount: engagement?.skipCount || 0,
+      shouldGateOnNextSkip: (engagement?.skipCount || 0) >= 9,
+      updatedAt: engagement?.lastUpdatedAt || null,
+    });
   }
 
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -195,6 +257,49 @@ export async function POST(request, { params }) {
     });
 
     return response;
+  }
+
+  if (path === 'ad-engagement') {
+    const user = await resolveAuthenticatedUser(request);
+    if (!user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    let payload = {};
+    try {
+      payload = await request.json();
+    } catch (error) {}
+
+    const action = payload?.action;
+    if (!action) {
+      return NextResponse.json({ error: 'Missing action' }, { status: 400 });
+    }
+
+    const engagement = await getAdEngagementForUser(user.id);
+    const currentSkipCount = engagement?.skipCount || 0;
+
+    if (action === 'skip-attempt') {
+      const nextSkipCount = currentSkipCount + 1;
+      const shouldGate = nextSkipCount % 10 === 0;
+      const saved = await setAdEngagementForUser(user.id, { skipCount: nextSkipCount });
+      return NextResponse.json({
+        skipCount: saved.skipCount,
+        shouldGate,
+      });
+    }
+
+    if (action === 'complete-gate') {
+      const reason = payload?.reason || 'unknown';
+      const nextSkipCount = reason === 'skip' ? 0 : currentSkipCount;
+      const saved = await setAdEngagementForUser(user.id, { skipCount: nextSkipCount });
+      return NextResponse.json({
+        ok: true,
+        reason,
+        skipCount: saved.skipCount,
+      });
+    }
+
+    return NextResponse.json({ error: 'Unsupported action' }, { status: 400 });
   }
 
   if (path === 'speech-token') {

@@ -8,8 +8,8 @@ import ProfileSettingsModal from '@/components/profile-settings-modal'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
-  Mic, MicOff, Video, VideoOff, SkipForward, Phone, Flag, Heart, Captions, UserPlus,
-  Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal, AlertTriangle
+  Mic, MicOff, Video, VideoOff, SkipForward, Phone, Flag, Captions, UserPlus,
+  Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal, AlertTriangle, ThumbsUp, ExternalLink
 } from 'lucide-react'
 
 function generateId() {
@@ -30,6 +30,7 @@ const REPORT_REASONS = [
 ]
 
 const WAITING_MONETAG_ZONE = process.env.NEXT_PUBLIC_MONETAG_ZONE_WAITING || process.env.NEXT_PUBLIC_MONETAG_ZONE_DEFAULT || '10799188'
+const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -187,6 +188,11 @@ function ChatPageContent() {
   const [interactionHistory, setInteractionHistory] = useState([])
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] })
   const [sessionUser, setSessionUser] = useState(null)
+  const [sessionResolved, setSessionResolved] = useState(false)
+  const [adEngagement, setAdEngagement] = useState({ skipCount: 0, shouldGateOnNextSkip: false })
+  const [adGateOpen, setAdGateOpen] = useState(false)
+  const [adGateReason, setAdGateReason] = useState(null)
+  const [adGateLoading, setAdGateLoading] = useState(false)
 
   // Caption state
   const [myTranscript, setMyTranscript] = useState('')
@@ -310,6 +316,7 @@ function ChatPageContent() {
   const matchedInterestsTimeoutRef = useRef(null)
   const matchedInterestsHideTimeoutRef = useRef(null)
   const searchingModeRef = useRef(false)
+  const pendingAdActionRef = useRef(null)
 
   // Keep refs in sync
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
@@ -385,10 +392,12 @@ function ChatPageContent() {
         const data = await res.json()
         if (!cancelled) {
           setSessionUser(data?.user || null)
+          setSessionResolved(true)
         }
       } catch (e) {
         if (!cancelled) {
           setSessionUser(null)
+          setSessionResolved(true)
         }
       }
     }
@@ -398,6 +407,35 @@ function ChatPageContent() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!sessionResolved) return
+    if (sessionUser) return
+    router.replace('/')
+  }, [sessionResolved, sessionUser, router])
+
+  useEffect(() => {
+    if (!sessionUser?.id) return
+    let cancelled = false
+
+    fetch('/api/ad-engagement', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        setAdEngagement({
+          skipCount: Number(data?.skipCount || 0),
+          shouldGateOnNextSkip: !!data?.shouldGateOnNextSkip,
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAdEngagement({ skipCount: 0, shouldGateOnNextSkip: false })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionUser?.id])
 
   useEffect(() => {
     let cancelled = false
@@ -786,9 +824,57 @@ function ChatPageContent() {
     })
   }
 
+  function openAdGate(reason, action) {
+    pendingAdActionRef.current = action
+    setAdGateReason(reason)
+    setAdGateOpen(true)
+  }
+
+  async function completeAdGate(reason) {
+    try {
+      const res = await fetch('/api/ad-engagement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'complete-gate', reason }),
+      })
+      const data = await res.json()
+      setAdEngagement((prev) => ({
+        ...prev,
+        skipCount: Number(data?.skipCount || 0),
+        shouldGateOnNextSkip: Number(data?.skipCount || 0) >= 9,
+      }))
+    } catch (error) {}
+  }
+
+  async function handleAdGateContinue() {
+    if (adGateLoading) return
+    setAdGateLoading(true)
+    const reason = adGateReason
+    await completeAdGate(reason)
+    const action = pendingAdActionRef.current
+    pendingAdActionRef.current = null
+    setAdGateOpen(false)
+    setAdGateReason(null)
+    setAdGateLoading(false)
+    action?.()
+  }
+
+  function closeAdGate() {
+    if (adGateLoading) return
+    setAdGateOpen(false)
+    setAdGateReason(null)
+    pendingAdActionRef.current = null
+  }
+
+  function handleOpenFilters() {
+    openAdGate('filters', () => setShowPreferences(true))
+  }
+
   function handleAddFriend(targetUserId = partnerUserId) {
     if (!socketRef.current || !targetUserId) return
-    socketRef.current.emit('send-friend-request', { targetUserId })
+    openAdGate('add-friend', () => {
+      socketRef.current?.emit('send-friend-request', { targetUserId })
+    })
   }
 
   function handleAcceptFriendRequest(requestId) {
@@ -809,6 +895,7 @@ function ChatPageContent() {
 
   // =================== SOCKET.IO CONNECTION ===================
   useEffect(() => {
+    if (!sessionResolved || !sessionUser?.id) return undefined
     let socket = null
     let destroyed = false
 
@@ -841,6 +928,9 @@ function ChatPageContent() {
         socket.on('matched', handleMatched)
         socket.on('signal', handleSignal)
         socket.on('partner-left', handlePartnerLeft)
+        socket.on('partner-skipped', () => {
+          showActionFeedback('Partner skipped to the next chat')
+        })
         socket.on('receive-message', handleReceiveMessage)
         socket.on('typing', () => setIsPartnerTyping(true))
         socket.on('stop-typing', () => setIsPartnerTyping(false))
@@ -898,9 +988,9 @@ function ChatPageContent() {
         })
         socket.on('received-like', (data) => {
           if (typeof data?.totalLikes === 'number') {
-            showActionFeedback(`You got a like ❤️ · Total ${data.totalLikes}`)
+            showActionFeedback(`You got a thumbs up 👍 · Total ${data.totalLikes}`)
           } else {
-            showActionFeedback('You got a like ❤️')
+            showActionFeedback('You got a thumbs up 👍')
           }
         })
         socket.on('action-feedback', (data) => {
@@ -909,7 +999,7 @@ function ChatPageContent() {
             if (data.status === 'ok' || data.status === 'duplicate') {
               setHasLikedPartner(true)
             }
-            showActionFeedback(data.status === 'duplicate' ? 'You already liked this user' : 'Like sent ❤️')
+            showActionFeedback(data.status === 'duplicate' ? 'You already liked this user' : 'Thumbs up sent 👍')
           }
 
           if (data.type === 'report') {
@@ -1001,6 +1091,7 @@ function ChatPageContent() {
         socket.off('matched')
         socket.off('signal')
         socket.off('partner-left')
+        socket.off('partner-skipped')
         socket.off('receive-message')
         socket.off('typing')
         socket.off('stop-typing')
@@ -1026,7 +1117,7 @@ function ChatPageContent() {
         clearTimeout(actionFeedbackTimeoutRef.current)
       }
     }
-  }, [])
+  }, [sessionResolved, sessionUser?.id])
 
   useEffect(() => {
     if (!socketConnected || !socketRef.current) return
@@ -1309,6 +1400,10 @@ function ChatPageContent() {
   // =================== HANDLERS ===================
   function joinQueue() {
     if (!socketRef.current?.connected) return
+    if (!sessionUser?.id) {
+      router.replace('/')
+      return
+    }
     console.log('[Client] joinQueue start', { mode, interests: interestKeywords })
     setConnectionState('waiting')
     setMessages([])
@@ -1748,6 +1843,10 @@ function ChatPageContent() {
   }
 
   function handleStartSearch() {
+    if (!sessionUser?.id) {
+      router.replace('/')
+      return
+    }
     if (mode === 'video' && !hasCameraPermission) {
       setMediaWarning('Camera access is required before you can start video chat.')
       return
@@ -1768,7 +1867,7 @@ function ChatPageContent() {
       if (connectionState === 'waiting') {
         socketRef.current.emit('leave-queue')
       } else if (connectionState === 'connecting' || connectionState === 'connected') {
-        socketRef.current.emit('next')
+        socketRef.current.emit('next', { reason: 'stop' })
       }
     }
     resetSessionUi()
@@ -1799,21 +1898,46 @@ function ChatPageContent() {
   }
 
   function handleNext() {
-    pendingStartRef.current = true
-    updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
-    socketRef.current?.emit('next')
-    resetSessionUi()
-    if (socketRef.current?.connected) {
-      joinQueue()
-    } else {
-      setConnectionState('waiting')
+    if (!sessionUser?.id) return
+    const proceedWithSkip = () => {
+      pendingStartRef.current = true
+      updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
+      socketRef.current?.emit('next', { reason: 'skip' })
+      resetSessionUi()
+      if (socketRef.current?.connected) {
+        joinQueue()
+      } else {
+        setConnectionState('waiting')
+      }
     }
+
+    fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'skip-attempt' }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const skipCount = Number(data?.skipCount || 0)
+        setAdEngagement({
+          skipCount,
+          shouldGateOnNextSkip: skipCount >= 9,
+        })
+        if (data?.shouldGate) {
+          openAdGate('skip', proceedWithSkip)
+          return
+        }
+        proceedWithSkip()
+      })
+      .catch(() => {
+        proceedWithSkip()
+      })
   }
 
   function handleEnd() {
     pendingStartRef.current = false
     updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
-    socketRef.current?.emit('next')
+    socketRef.current?.emit('next', { reason: 'end' })
     cleanupPeerConnection()
     stopRecognitionEngine()
     stopBackgroundBlurProcessing()
@@ -1871,7 +1995,7 @@ function ChatPageContent() {
     setMobilePane('video')
     setPanelTab(null)
     pendingStartRef.current = false
-    socketRef.current?.emit('next')
+    socketRef.current?.emit('next', { reason: 'mode-switch' })
     router.push(buildChatUrl(nextMode))
   }
 
@@ -1920,6 +2044,14 @@ function ChatPageContent() {
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
   const currentPartnerHasIncomingRequest = partnerUserId ? incomingRequestIds.has(partnerUserId) : false
 
+  if (!sessionResolved) {
+    return <ChatPageFallback />
+  }
+
+  if (!sessionUser) {
+    return null
+  }
+
   // =================== ERROR STATE ===================
   if (error) {
     return (
@@ -1963,7 +2095,13 @@ function ChatPageContent() {
               </span>
               </div>
             </>
-            <GoogleAuthButton compact onUserChange={setSessionUser} onOpenSettings={() => setSettingsOpen(true)} userOverride={sessionUser} />
+            <GoogleAuthButton
+              compact
+              onUserChange={setSessionUser}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onLogout={() => router.replace('/')}
+              userOverride={sessionUser}
+            />
           </div>
         </div>
 
@@ -2074,6 +2212,50 @@ function ChatPageContent() {
               <div className="rounded-xl border border-gray-800 bg-gray-800/40 p-3 text-gray-400 text-xs">
                 Filters apply to your next search. Shared interests are preferred, but we still fall back quickly to keep wait times low.
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adGateOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white">Sponsored Break</h3>
+            <p className="mt-2 text-sm text-gray-400">
+              {adGateReason === 'skip'
+                ? `You reached the 10-skip limit (current: ${adEngagement.skipCount}). View this sponsored step to continue.`
+                : adGateReason === 'add-friend'
+                  ? 'View this sponsored step before sending a friend request.'
+                  : 'View this sponsored step before applying filters.'}
+            </p>
+            <MonetagAd
+              zone={WAITING_MONETAG_ZONE}
+              label="Sponsored"
+              className="mt-5"
+              minHeightClassName="min-h-[140px]"
+            />
+            <a
+              href={DIRECT_LINK_URL}
+              target="_blank"
+              rel="noopener noreferrer nofollow sponsored"
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
+            >
+              Open Sponsor <ExternalLink className="h-4 w-4" />
+            </a>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={closeAdGate}
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAdGateContinue}
+                disabled={adGateLoading}
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {adGateLoading ? 'Loading...' : 'Continue'}
+              </button>
             </div>
           </div>
         </div>
@@ -2200,7 +2382,7 @@ function ChatPageContent() {
                   <img
                     src="/logo.svg"
                     alt="HippiChat watermark"
-                    className="pointer-events-none absolute bottom-4 right-2 h-9 w-auto select-none opacity-20 grayscale brightness-[2.4]"
+                    className="pointer-events-none absolute bottom-3 right-3 h-8 w-auto select-none opacity-20 grayscale brightness-[2.4]"
                   />
 
                       {connectionState !== 'connected' && (
@@ -2234,6 +2416,24 @@ function ChatPageContent() {
                       )}
                     </div>
                   </div>
+                  {connectionState === 'connected' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={handleLikePartner}
+                        disabled={hasLikedPartner}
+                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/15 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <ThumbsUp className="h-4 w-4" /> {hasLikedPartner ? 'Liked' : 'Thumbs Up'}
+                      </button>
+                      <button
+                        onClick={() => openReportModal()}
+                        disabled={hasReportedPartner}
+                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/15 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Flag className="h-4 w-4" /> {hasReportedPartner ? 'Reported' : 'Report'}
+                      </button>
+                    </div>
+                  )}
 
                 </div>
 
@@ -2252,7 +2452,7 @@ function ChatPageContent() {
                       <img
                         src="/logo.svg"
                         alt="HippiChat watermark"
-                        className="pointer-events-none absolute bottom-3 right-2 h-7 w-auto select-none opacity-20 grayscale brightness-[2.4]"
+                        className="pointer-events-none absolute bottom-3 right-3 h-8 w-auto select-none opacity-20 grayscale brightness-[2.4]"
                       />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
@@ -2286,10 +2486,9 @@ function ChatPageContent() {
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
                   isMediaReady={isMediaReady}
-                  connectionState={connectionState}
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
-                  onFilters={() => setShowPreferences(true)}
+                  onFilters={handleOpenFilters}
                   connectionState={hasActiveMatch ? connectionState : 'idle'}
                 />
               </div>
@@ -2330,10 +2529,9 @@ function ChatPageContent() {
                   desktop
                   primaryActionIsStop={primaryActionIsStop}
                   isMediaReady={isMediaReady}
-                  connectionState={connectionState}
                   onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                   onSkip={handleNext}
-                  onFilters={() => setShowPreferences(true)}
+                  onFilters={handleOpenFilters}
                   connectionState={hasActiveMatch ? connectionState : 'idle'}
                 />
               </div>
@@ -2365,11 +2563,11 @@ function ChatPageContent() {
 
           {/* Partner country badge */}
           {partnerDisplayCountry && connectionState === 'connected' && (
-            <div className="absolute top-16 left-4 flex items-center gap-2 bg-gray-900/80 backdrop-blur rounded-lg px-3 py-1.5 z-10">
+            <div className="absolute right-4 top-4 flex items-center gap-2 rounded-lg bg-gray-900/80 px-3 py-1.5 backdrop-blur z-10">
               <span className="text-sm">{partnerDisplayCountry.countryFlag}</span>
               <span className="text-xs font-medium">{partnerDisplayCountry.countryName}</span>
-              <span className="text-xs text-pink-300 flex items-center gap-1 ml-1">
-                <Heart className="w-3 h-3 fill-pink-400 text-pink-400" /> {partnerLikes}
+              <span className="ml-1 flex items-center gap-1 text-xs text-emerald-300">
+                <ThumbsUp className="h-3 w-3" /> {partnerLikes}
               </span>
             </div>
           )}
@@ -2666,7 +2864,7 @@ function ChatPageContent() {
         </div>
       )}
         {/* Text Chat Sidebar */}
-        <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col bg-gray-900 border-l border-gray-800`}>
+        <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col overflow-hidden bg-gray-900 border-l border-gray-800`}>
           {/* Chat header */}
           <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -2711,7 +2909,7 @@ function ChatPageContent() {
           </div>
 
           {/* Chat input */}
-          <div className="mt-auto px-3 py-3 border-t border-gray-800 bg-gray-900">
+          <div className="mt-auto border-t border-gray-800 bg-gray-900 px-3 py-3">
             <div className="flex gap-2">
               <input
                 type="text"
@@ -2738,10 +2936,9 @@ function ChatPageContent() {
         <ControlButtons
           primaryActionIsStop={primaryActionIsStop}
           isMediaReady={isMediaReady}
-          connectionState={connectionState}
           onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
           onSkip={handleNext}
-          onFilters={() => setShowPreferences(true)}
+          onFilters={handleOpenFilters}
           connectionState={hasActiveMatch ? connectionState : 'idle'}
         />
 

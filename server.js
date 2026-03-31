@@ -1297,8 +1297,14 @@ app.prepare().then(() => {
       io.to(partnerId).emit('stop-typing');
     });
 
-    socket.on('next', () => {
-      console.log('[Socket] next:', socket.id);
+    socket.on('next', (data = {}) => {
+      console.log('[Socket] next:', socket.id, data?.reason || 'unknown');
+      const session = userSessions.get(socket.id);
+      const room = session?.roomId ? rooms.get(session.roomId) : null;
+      if (room && data?.reason === 'skip') {
+        const partnerId = getRoomPartnerId(room, socket.id);
+        io.to(partnerId).emit('partner-skipped');
+      }
       leaveRoom(socket);
       removeFromQueue(socket.id);
 

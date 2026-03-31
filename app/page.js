@@ -196,6 +196,14 @@ export default function HomePage() {
               </div>
             </div>
 
+            <SponsoredLinkCard
+              href={DIRECT_LINK_URL}
+              title="Sponsored offer"
+              description="Explore this sponsored link while we keep HippiChat free to use."
+              cta="Learn more"
+              className="mb-8 w-full max-w-2xl"
+            />
+
             <button
               onClick={() => {
                 if (!ensureAuthenticated({ type: 'start-flow' })) return
@@ -210,14 +218,6 @@ export default function HomePage() {
             <p className="text-sm text-gray-500 mt-4">
               Google sign-in required • Video + voice chat • Friends and history built in
             </p>
-
-            <SponsoredLinkCard
-              href={DIRECT_LINK_URL}
-              title="Sponsored offer"
-              description="Explore this sponsored link while we keep HippiChat free to use."
-              cta="Learn more"
-              className="mt-10 w-full max-w-2xl"
-            />
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
