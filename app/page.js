@@ -22,7 +22,7 @@ export default function HomePage() {
   const [sessionUser, setSessionUser] = useState(null)
   const [sessionLoading, setSessionLoading] = useState(true)
   const [showAuthGate, setShowAuthGate] = useState(false)
-  const [pendingAction, setPendingAction] = useState(null)
+  const [authIntentMode, setAuthIntentMode] = useState(null)
   const [phraseIndex, setPhraseIndex] = useState(0)
 
   const loadSession = useCallback(async () => {
@@ -78,11 +78,7 @@ export default function HomePage() {
   }, [buildChatUrlForUser, router, sessionUser])
 
   const handleStartChat = useCallback(async (mode) => {
-    if (sessionUser) {
-      proceedToChat(mode, sessionUser)
-      return
-    }
-
+    if (sessionLoading) return
     try {
       const freshUser = await loadSession()
       if (freshUser) {
@@ -92,26 +88,18 @@ export default function HomePage() {
       }
     } catch (error) {}
 
-    setPendingAction({ type: 'chat', mode })
+    setAuthIntentMode(mode)
     setShowAuthGate(true)
-  }, [loadSession, proceedToChat, sessionUser])
+  }, [loadSession, proceedToChat, sessionLoading])
 
-  useEffect(() => {
-    if (!sessionUser || !pendingAction) return
-
-    const action = pendingAction
-    setPendingAction(null)
+  const handleAuthGateSignInSuccess = useCallback((user) => {
+    if (!user) return
+    setSessionUser(user)
     setShowAuthGate(false)
-
-    if (action.type === 'start-flow') {
-      setStep('consent')
-      return
-    }
-
-    if (action.type === 'chat') {
-      proceedToChat(action.mode, sessionUser)
-    }
-  }, [pendingAction, proceedToChat, sessionUser])
+    const mode = authIntentMode || 'video'
+    setAuthIntentMode(null)
+    proceedToChat(mode, user)
+  }, [authIntentMode, proceedToChat])
 
   const renderAuthGate = () => {
     if (!showAuthGate) return null
@@ -121,7 +109,13 @@ export default function HomePage() {
         <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">Sign in to continue</h3>
-            <button onClick={() => setShowAuthGate(false)} className="text-gray-400 hover:text-white">
+            <button
+              onClick={() => {
+                setShowAuthGate(false)
+                setAuthIntentMode(null)
+              }}
+              className="text-gray-400 hover:text-white"
+            >
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -129,7 +123,7 @@ export default function HomePage() {
             Please sign in with your Google account before starting chat.
           </p>
           <div className="flex justify-center">
-            <GoogleAuthButton onUserChange={setSessionUser} />
+            <GoogleAuthButton onSignInSuccess={handleAuthGateSignInSuccess} />
           </div>
         </div>
       </div>
@@ -157,8 +151,8 @@ export default function HomePage() {
             ) : (
               <GoogleAuthButton
                 compact
-                onUserChange={setSessionUser}
-                onLogout={() => setSessionUser(null)}
+                onSignInSuccess={setSessionUser}
+                onLogoutSuccess={() => setSessionUser(null)}
                 userOverride={sessionUser}
               />
             )}

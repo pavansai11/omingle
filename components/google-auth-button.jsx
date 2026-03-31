@@ -5,7 +5,13 @@ import { Loader2, LogOut } from 'lucide-react'
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
 
-export default function GoogleAuthButton({ compact = false, onUserChange, onOpenSettings, onLogout, userOverride = undefined }) {
+export default function GoogleAuthButton({
+  compact = false,
+  onOpenSettings,
+  onSignInSuccess,
+  onLogoutSuccess,
+  userOverride = undefined,
+}) {
   const containerRef = useRef(null)
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -44,10 +50,6 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
       cancelled = true
     }
   }, [isControlled])
-
-  useEffect(() => {
-    onUserChange?.(user)
-  }, [onUserChange, user])
 
   useEffect(() => {
     if (!isControlled) return
@@ -102,6 +104,7 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
               }
 
               setUser(data?.user || null)
+              onSignInSuccess?.(data?.user || null)
             } catch (err) {
               setError(err?.message || 'Google sign-in failed')
             } finally {
@@ -140,7 +143,7 @@ export default function GoogleAuthButton({ compact = false, onUserChange, onOpen
       if (window.google?.accounts?.id) {
         window.google.accounts.id.disableAutoSelect()
       }
-      onLogout?.()
+      onLogoutSuccess?.()
     } catch (err) {
       setError('Logout failed')
     } finally {

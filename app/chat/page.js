@@ -2097,9 +2097,8 @@ function ChatPageContent() {
             </>
             <GoogleAuthButton
               compact
-              onUserChange={setSessionUser}
               onOpenSettings={() => setSettingsOpen(true)}
-              onLogout={() => router.replace('/')}
+              onLogoutSuccess={() => router.replace('/')}
               userOverride={sessionUser}
             />
           </div>
