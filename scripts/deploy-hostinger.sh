@@ -13,6 +13,7 @@ cd "$APP_DIR"
 
 echo "[deploy] Fetching latest code from origin/$BRANCH"
 git fetch origin "$BRANCH"
+git checkout -B "$BRANCH" "origin/$BRANCH"
 git reset --hard "origin/$BRANCH"
 
 echo "[deploy] Installing dependencies"

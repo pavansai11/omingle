@@ -16,15 +16,13 @@ TECH STACK (do not deviate):
 - TURN server: Coturn (self-hosted) — for users behind firewalls
 - Speech-to-text: Browser Web Speech API (free, no API cost)
 - Translation (Indian languages): Bhashini API (free, Govt of India)
-- Translation (all other languages): Google Cloud Translation API v2
+- Translation (all other languages): Google Translate API v2
 - Database: MongoDB Atlas (free M0 tier) via Mongoose
 - Caching/rooms: Redis (Upstash free tier) for matchmaking queue
-- Hosting: Hetzner CX21 VPS (€3.29/mo) — backend + TURN server
-- Frontend hosting: Vercel (free tier)
-- CDN + DDoS: Cloudflare (free tier)
+- Hosting: Hostinger VPS — frontend + backend + TURN server
 - Ads (revenue): Google AdSense + PropellerAds script tags
 - Analytics: Google Analytics 4 (free)
-- Domain: Any registrar, pointed to Cloudflare
+- Domain: Any registrar, pointed to your VPS / Hostinger DNS
 
 CORE RULES:
 1. All code must be TypeScript with strict mode
@@ -49,7 +47,7 @@ Create the following exact folder structure:
 
 HippiChat/
 ├── apps/
-│   ├── web/                          ← Next.js 14 frontend (Vercel)
+│   ├── web/                          ← Next.js 14 frontend
 │   │   ├── app/
 │   │   │   ├── layout.tsx            ← Root layout with GA4 script
 │   │   │   ├── page.tsx              ← Home/landing page
@@ -711,7 +709,7 @@ NEXT_PUBLIC_SOCKET_URL=http://YOUR_HETZNER_IP:3001
 BHASHINI_API_KEY=your_bhashini_api_key_here
 BHASHINI_USER_ID=your_bhashini_user_id_here
 
-# Google Cloud Translation API
+# Google Translate API
 GOOGLE_TRANSLATE_API_KEY=your_google_api_key_here
 
 # MongoDB Atlas (free M0 cluster)
@@ -805,7 +803,7 @@ systemctl enable coturn && systemctl start coturn
 Write a complete README.md with:
 1. Prerequisites list
 2. Local development setup (step by step)  
-3. Production deployment steps (Hetzner + Vercel + Cloudflare)
+3. Production deployment steps (Hostinger VPS)
 4. All environment variable explanations
 5. How to get each API key (exact links)
 ```
@@ -821,7 +819,7 @@ Write a complete README.md with:
 - **Covers:** Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, Odia, Assamese, Urdu, Sanskrit (22 Indian languages)
 - **Rate limit:** 10 requests/second free, higher on request
 
-### 2. Google Cloud Translation API
+### 2. Google Translate API
 - **URL:** https://console.cloud.google.com
 - **Steps:** Create project → Enable "Cloud Translation API" → Go to APIs & Services → Credentials → Create API Key → Restrict to Translation API only
 - **Cost:** First 500,000 characters/month FREE. After that: $20 per 1 million characters. At your scale (year 1), expect ₹0–200/month
@@ -843,15 +841,10 @@ Write a complete README.md with:
 - **Cost:** €3.29/month (~₹295/month) — includes 20TB outbound bandwidth FREE
 - **What runs here:** Node.js signaling server (PM2) + Coturn TURN server
 
-### 6. Vercel (Frontend Hosting — FREE)
-- **URL:** https://vercel.com
-- **Steps:** Sign up → Connect GitHub → Import your repo → Set environment variables → Deploy
-- **Cost:** FREE for hobby (100GB bandwidth, unlimited deployments)
-
-### 7. Cloudflare (CDN + DDoS — FREE)
-- **URL:** https://cloudflare.com
-- **Steps:** Add your domain → Change nameservers → Enable Proxy → Turn on "Under Attack Mode" if needed
-- **Cost:** FREE tier fully sufficient
+### 6. Hostinger VPS (Frontend + Backend Hosting)
+- **URL:** https://www.hostinger.com/vps-hosting
+- **Steps:** Create VPS → add SSH access → install Node.js + PM2 + Nginx → clone repo → configure env → build → run via PM2
+- **Cost:** depends on selected VPS plan
 
 ### 8. Google AdSense
 - **URL:** https://adsense.google.com
@@ -863,7 +856,7 @@ Write a complete README.md with:
 - **URL:** https://analytics.google.com
 - **Steps:** Create account → Create property → Get Measurement ID (G-XXXXXXXXXX)
 
-### 10. Google Cloud Console (for Translate API)
+### 9. Google APIs Console (for Translate API)
 - **URL:** https://console.cloud.google.com  
 - **Note:** Same account as above. Enable billing (required) but you'll stay in free tier for months.
 

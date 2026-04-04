@@ -92,7 +92,7 @@ certbot --nginx -d hippichat.com -d www.hippichat.com
 
 ## 9. Google OAuth settings
 
-In **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs**:
+In **Google APIs & Services → Credentials → OAuth 2.0 Client IDs**:
 
 - client type must be **Web application**
 - add **Authorized JavaScript origins**:
@@ -111,13 +111,21 @@ This repo includes:
 - `scripts/deploy-hostinger.sh`
 - `.github/workflows/deploy-hostinger.yml`
 
-To enable auto-deploy from GitHub, add these GitHub repo secrets:
+The workflow is already pinned to this VPS and app path:
 
-- `HOSTINGER_HOST` → VPS IP / hostname
-- `HOSTINGER_USER` → SSH username (e.g. `root`)
+- Host: `72.60.170.97`
+- User: `root`
+- Port: `22`
+- App dir: `/var/www/hippichat`
+
+To enable auto-deploy from GitHub, add **one** authentication method as repo secrets:
+
+- `HOSTINGER_PASSWORD` → VPS password for `root`
+
+Or, if you prefer SSH key auth instead of password:
+
 - `HOSTINGER_SSH_KEY` → private SSH key
-- `HOSTINGER_PORT` → usually `22`
-- `HOSTINGER_APP_DIR` → `/var/www/hippichat`
+- `HOSTINGER_SSH_PASSPHRASE` → optional key passphrase
 
 Recommended PM2 memory guard for this VPS path:
 

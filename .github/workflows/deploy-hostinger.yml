@@ -9,16 +9,47 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    concurrency:
+      group: hostinger-production-deploy
+      cancel-in-progress: true
+    env:
+      HOSTINGER_PASSWORD: ${{ secrets.HOSTINGER_PASSWORD }}
+      HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
 
     steps:
-      - name: Deploy over SSH
+      - name: Deploy over SSH with password
+        if: env.HOSTINGER_PASSWORD != ''
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.HOSTINGER_HOST }}
-          username: ${{ secrets.HOSTINGER_USER }}
-          key: ${{ secrets.HOSTINGER_SSH_KEY }}
-          port: ${{ secrets.HOSTINGER_PORT }}
+          host: 72.60.170.97
+          username: root
+          port: 22
+          password: ${{ secrets.HOSTINGER_PASSWORD }}
+          script_stop: true
+          command_timeout: 30m
           script: |
-            export APP_DIR="${{ secrets.HOSTINGER_APP_DIR }}"
+            export APP_DIR="/var/www/hippichat"
             export BRANCH="main"
             bash "$APP_DIR/scripts/deploy-hostinger.sh"
+
+      - name: Deploy over SSH with key
+        if: env.HOSTINGER_PASSWORD == '' && env.HOSTINGER_SSH_KEY != ''
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 72.60.170.97
+          username: root
+          port: 22
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          passphrase: ${{ secrets.HOSTINGER_SSH_PASSPHRASE }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            export APP_DIR="/var/www/hippichat"
+            export BRANCH="main"
+            bash "$APP_DIR/scripts/deploy-hostinger.sh"
+
+      - name: Fail if SSH credentials are missing
+        if: env.HOSTINGER_PASSWORD == '' && env.HOSTINGER_SSH_KEY == ''
+        run: |
+          echo "Set either HOSTINGER_PASSWORD or HOSTINGER_SSH_KEY in GitHub repository secrets."
+          exit 1

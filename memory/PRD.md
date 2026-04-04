@@ -8,7 +8,7 @@ HippiChat is a random stranger video/voice chat web app where users who speak di
 - **Backend**: Custom Node.js server with Socket.io signaling
 - **Real-time video/voice**: WebRTC (browser-native, P2P)
 - **Speech-to-text**: Browser Web Speech API (free)
-- **Translation**: MOCKED (ready for Bhashini + Google Cloud Translation API)
+- **Translation**: MOCKED (ready for Bhashini + Google Translate API)
 - **Matchmaking**: In-memory queue (ready for Redis/Upstash)
 - **Database**: MongoDB (available via MONGO_URL)
 

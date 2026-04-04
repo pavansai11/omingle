@@ -117,7 +117,7 @@ Test this URL before connecting your custom domain.
 
 ## 6) Fix Google Sign-In properly
 
-In **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs**:
+In **Google APIs & Services → Credentials → OAuth 2.0 Client IDs**:
 
 - make sure the client type is **Web application**
 
@@ -226,8 +226,6 @@ You now already have:
 - `Dockerfile`
 - `.dockerignore`
 - `.env.production.example`
-- `.github/workflows/deploy-cloud-run.yml`
-- `CLOUD_RUN_DEPLOYMENT.md`
 - `render.yaml`
 - `RENDER_DEPLOYMENT.md`
 
