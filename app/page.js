@@ -3,7 +3,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
-import GoogleSponsoredAd from '@/components/google-sponsored-ad'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
 const HERO_PHRASES = [
@@ -189,12 +188,6 @@ export default function HomePage() {
               </div>
             </div>
 
-            <GoogleSponsoredAd
-              label="Sponsored"
-              className="mb-8 w-full max-w-2xl"
-              minHeightClassName="min-h-[128px]"
-            />
-
             <button
               onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
@@ -224,13 +217,6 @@ export default function HomePage() {
               ))}
             </div>
 
-            <GoogleSponsoredAd
-              label="Sponsored"
-              adSlot="8193616179"
-              adClassName=""
-              className="mt-12 w-full max-w-4xl"
-              minHeightClassName="min-h-[140px]"
-            />
           </main>
         </div>
         {renderAuthGate()}
