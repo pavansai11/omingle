@@ -3,12 +3,13 @@
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
+import GoogleSponsoredAd from '@/components/google-sponsored-ad'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
   Mic, MicOff, Video, VideoOff, SkipForward, Phone, Flag, Captions, UserPlus,
-  Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal, AlertTriangle, ThumbsUp
+  Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal, AlertTriangle, ThumbsUp, ExternalLink
 } from 'lucide-react'
 
 function generateId() {
@@ -27,6 +28,12 @@ const REPORT_REASONS = [
   { value: 'underage', label: 'Appears underage' },
   { value: 'other', label: 'Other' },
 ]
+
+const DIRECT_LINK_URL = process.env.NEXT_PUBLIC_DIRECT_LINK_URL || 'https://omg10.com/4/10800693'
+const MONETAG_POPUNDER_ZONE = '10809114'
+const MONETAG_POPUNDER_SRC = 'https://al5sm.com/tag.min.js'
+const MONETAG_POPUNDER_SCRIPT_ID = 'monetag-popunder-script'
+const MONETAG_VOICE_SCRIPT_ID = 'monetag-voice-vignette-script'
 
 function regionCodeToFlag(regionCode) {
   if (!regionCode || regionCode.length !== 2) return '🌐'
@@ -185,6 +192,12 @@ function ChatPageContent() {
   const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] })
   const [sessionUser, setSessionUser] = useState(null)
   const [sessionResolved, setSessionResolved] = useState(false)
+  const [adEngagement, setAdEngagement] = useState({ skipCount: 0, shouldGateOnNextSkip: false })
+  const [adGateOpen, setAdGateOpen] = useState(false)
+  const [adGateReason, setAdGateReason] = useState(null)
+  const [adGateLoading, setAdGateLoading] = useState(false)
+  const [adGateNonce, setAdGateNonce] = useState(null)
+  const [adGateSponsorClicked, setAdGateSponsorClicked] = useState(false)
 
   // Caption state
   const [myTranscript, setMyTranscript] = useState('')
@@ -310,6 +323,7 @@ function ChatPageContent() {
   const matchedInterestsTimeoutRef = useRef(null)
   const matchedInterestsHideTimeoutRef = useRef(null)
   const searchingModeRef = useRef(false)
+  const pendingAdActionRef = useRef(null)
 
   // Keep refs in sync
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
@@ -406,6 +420,29 @@ function ChatPageContent() {
     if (sessionUser) return
     router.replace('/')
   }, [sessionResolved, sessionUser, router])
+
+  useEffect(() => {
+    if (!sessionUser?.id) return
+    let cancelled = false
+
+    fetch('/api/ad-engagement', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        setAdEngagement({
+          skipCount: Number(data?.skipCount || 0),
+          shouldGateOnNextSkip: !!data?.shouldGateOnNextSkip,
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAdEngagement({ skipCount: 0, shouldGateOnNextSkip: false })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionUser?.id])
 
   useEffect(() => {
     let cancelled = false
@@ -794,13 +831,125 @@ function ChatPageContent() {
     })
   }
 
+  async function openAdGateSession(reason) {
+    const response = await fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'open-gate', reason }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data?.error || 'Unable to open ad gate')
+    }
+    setAdGateNonce(data?.pendingGate?.nonce || null)
+    return data
+  }
+
+  function loadMonetagScript(scriptId) {
+    if (typeof window === 'undefined') return Promise.resolve(false)
+    const anyLoaded = document.querySelector(`script[src="${MONETAG_POPUNDER_SRC}"][data-zone="${MONETAG_POPUNDER_ZONE}"]`)
+    if (anyLoaded) return Promise.resolve(true)
+    const existing = document.getElementById(scriptId)
+    if (existing) return Promise.resolve(true)
+
+    return new Promise((resolve) => {
+      const script = document.createElement('script')
+      script.id = scriptId
+      script.dataset.zone = MONETAG_POPUNDER_ZONE
+      script.src = MONETAG_POPUNDER_SRC
+      script.async = true
+      script.onload = () => resolve(true)
+      script.onerror = () => resolve(false)
+      ;([document.documentElement, document.body].filter(Boolean).pop() || document.body).appendChild(script)
+    })
+  }
+
+  async function openSponsorWithHybridFallback() {
+    const popunderReady = await loadMonetagScript(MONETAG_POPUNDER_SCRIPT_ID)
+    if (popunderReady) {
+      setAdGateSponsorClicked(true)
+      return true
+    }
+
+    const opened = window.open(DIRECT_LINK_URL, '_blank', 'noopener,noreferrer')
+    if (opened) {
+      setAdGateSponsorClicked(true)
+      return true
+    }
+    return false
+  }
+
+  async function openAdGate(reason, action) {
+    setAdGateLoading(true)
+    await openSponsorWithHybridFallback()
+
+    try {
+      const data = await openAdGateSession(reason)
+      await completeAdGate(reason, data?.pendingGate?.nonce || null)
+    } catch (error) {
+      // Allow flow to continue even if ad gate APIs fail.
+    } finally {
+      setAdGateLoading(false)
+      action?.()
+    }
+  }
+
+  async function completeAdGate(reason, nonce) {
+    const res = await fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'complete-gate', reason, nonce }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error || 'Unable to complete ad gate')
+    }
+    setAdEngagement((prev) => ({
+      ...prev,
+      skipCount: Number(data?.skipCount || 0),
+      shouldGateOnNextSkip: Number(data?.skipCount || 0) >= 9,
+    }))
+  }
+
+  async function handleAdGateContinue() {
+    if (adGateLoading) return
+    setAdGateLoading(true)
+    const reason = adGateReason
+    try {
+      await completeAdGate(reason, adGateNonce)
+    } catch (error) {
+      setAdGateLoading(false)
+      showActionFeedback('Please wait for the sponsored step to finish')
+      return
+    }
+    const action = pendingAdActionRef.current
+    pendingAdActionRef.current = null
+    setAdGateOpen(false)
+    setAdGateReason(null)
+    setAdGateNonce(null)
+    setAdGateSponsorClicked(false)
+    setAdGateLoading(false)
+    action?.()
+  }
+
+  function closeAdGate() {
+    if (adGateLoading) return
+    setAdGateOpen(false)
+    setAdGateReason(null)
+    setAdGateNonce(null)
+    setAdGateSponsorClicked(false)
+    pendingAdActionRef.current = null
+  }
+
   function handleOpenFilters() {
-    setShowPreferences(true)
+    openAdGate('filters', () => setShowPreferences(true))
   }
 
   function handleAddFriend(targetUserId = partnerUserId) {
     if (!socketRef.current || !targetUserId) return
-    socketRef.current.emit('send-friend-request', { targetUserId })
+    openAdGate('add-friend', () => {
+      socketRef.current?.emit('send-friend-request', { targetUserId })
+    })
   }
 
   function handleAcceptFriendRequest(requestId) {
@@ -1044,6 +1193,35 @@ function ChatPageContent() {
       }
     }
   }, [sessionResolved, sessionUser?.id])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const removeVoiceScript = () => {
+      const existing = document.getElementById(MONETAG_VOICE_SCRIPT_ID)
+      if (existing) {
+        existing.remove()
+      }
+    }
+
+    if (mode !== 'voice') {
+      removeVoiceScript()
+      return undefined
+    }
+
+    const existing = document.getElementById(MONETAG_VOICE_SCRIPT_ID)
+    if (!existing) {
+      const script = document.createElement('script')
+      script.id = MONETAG_VOICE_SCRIPT_ID
+      script.dataset.zone = MONETAG_POPUNDER_ZONE
+      script.src = MONETAG_POPUNDER_SRC
+      script.async = true
+      ;([document.documentElement, document.body].filter(Boolean).pop() || document.body).appendChild(script)
+    }
+
+    return () => {
+      removeVoiceScript()
+    }
+  }, [mode])
 
   useEffect(() => {
     if (!socketConnected || !socketRef.current) return
@@ -1838,15 +2016,40 @@ function ChatPageContent() {
   }
 
   function handleNext() {
-    pendingStartRef.current = true
-    updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
-    socketRef.current?.emit('next', { reason: 'skip' })
-    resetSessionUi()
-    if (socketRef.current?.connected) {
-      joinQueue()
-    } else {
-      setConnectionState('waiting')
+    if (!sessionUser?.id) return
+    const proceedWithSkip = () => {
+      pendingStartRef.current = true
+      updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
+      socketRef.current?.emit('next', { reason: 'skip' })
+      resetSessionUi()
+      if (socketRef.current?.connected) {
+        joinQueue()
+      } else {
+        setConnectionState('waiting')
+      }
     }
+
+    fetch('/api/ad-engagement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'skip-attempt' }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        const skipCount = Number(data?.skipCount || 0)
+        setAdEngagement({
+          skipCount,
+          shouldGateOnNextSkip: skipCount >= 9,
+        })
+        if (data?.shouldGate) {
+          openAdGate('skip', proceedWithSkip)
+          return
+        }
+        proceedWithSkip()
+      })
+      .catch(() => {
+        proceedWithSkip()
+      })
   }
 
   function handleEnd() {
@@ -2143,6 +2346,50 @@ function ChatPageContent() {
         </div>
       )}
 
+      {adGateOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white">Sponsored Break</h3>
+            <p className="mt-2 text-sm text-gray-400">
+              {adGateReason === 'skip'
+                ? `You reached the 10-skip limit (current: ${adEngagement.skipCount}). View this sponsored step to continue.`
+                : adGateReason === 'add-friend'
+                  ? 'View this sponsored step before sending a friend request.'
+                  : 'View this sponsored step before applying filters.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void openSponsorWithHybridFallback()
+              }}
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-2.5 text-sm font-medium text-violet-200 hover:bg-violet-500/25"
+            >
+              Open Sponsor <ExternalLink className="h-4 w-4" />
+            </button>
+            <p className="mt-3 text-xs text-gray-500">
+              {adGateSponsorClicked
+                ? 'Sponsor link opened. You can continue now.'
+                : 'Open the sponsor link, then continue.'}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={closeAdGate}
+                className="rounded-xl border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAdGateContinue}
+                disabled={adGateLoading || !adGateNonce}
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {adGateLoading ? 'Loading...' : 'Continue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {reportModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
@@ -2370,6 +2617,13 @@ function ChatPageContent() {
                       }} />
                   ))}
                 </div>
+                <GoogleSponsoredAd
+                  label="Sponsored"
+                  className="w-full max-w-[160px] flex justify-center"
+                  minHeightClassName="min-h-[140px]"
+                  frameClassName="h-[140px] w-[140px] max-w-[140px] p-1.5"
+                  adClassName="w-full h-full aspect-square"
+                />
               </div>
               {/* Hidden audio element for remote stream */}
               <audio ref={remoteVideoRef} autoPlay className="hidden" />

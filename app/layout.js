@@ -23,6 +23,11 @@ export default function RootLayout({ children }) {
     <html lang="en" className="dark">
       <head>
         <script dangerouslySetInnerHTML={{__html:'window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);'}} />
+        <script
+          async
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9617793975321646"
+          crossOrigin="anonymous"
+        />
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </head>
       <body className="bg-gray-950 text-white antialiased min-h-screen">
