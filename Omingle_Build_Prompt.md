@@ -13,13 +13,13 @@ TECH STACK (do not deviate):
 - Frontend: Next.js 14 (App Router) + TypeScript + Tailwind CSS
 - Backend: Node.js signaling server using Socket.io (separate Express server)
 - Real-time video/voice: WebRTC (browser-native, P2P, free)
-- TURN server: Coturn (self-hosted) — for users behind firewalls
+- TURN server: Cloudflare TURN (managed) — issue short-lived ICE credentials from the backend
 - Speech-to-text: Browser Web Speech API (free, no API cost)
 - Translation (Indian languages): Bhashini API (free, Govt of India)
 - Translation (all other languages): Google Translate API v2
 - Database: MongoDB Atlas (free M0 tier) via Mongoose
 - Caching/rooms: Redis (Upstash free tier) for matchmaking queue
-- Hosting: Hostinger VPS — frontend + backend + TURN server
+- Hosting: Hostinger VPS — frontend + backend, with TURN relaying handled by Cloudflare
 - Ads (revenue): Google AdSense + PropellerAds script tags
 - Analytics: Google Analytics 4 (free)
 - Domain: Any registrar, pointed to your VPS / Hostinger DNS
@@ -196,7 +196,7 @@ FILE: apps/web/lib/constants.ts
 Export:
 - SOCKET_URL (from env)
 - STUN_SERVERS (Google STUN: stun:stun.l.google.com:19302 and stun:stun1.l.google.com:19302)
-- TURN_SERVER config object (from env — your Hetzner Coturn)
+- TURN_CREDENTIALS_ENDPOINT (backend endpoint that returns Cloudflare TURN iceServers)
 - MAX_CHAT_MESSAGES = 100
 - RECONNECT_ATTEMPTS = 3
 - AD_SLOTS object with positions
@@ -718,10 +718,10 @@ MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/HippiChat
 # Upstash Redis (free tier)
 REDIS_URL=redis://default:password@host.upstash.io:port
 
-# TURN Server (your Coturn on Hetzner)
-NEXT_PUBLIC_TURN_URL=turn:YOUR_HETZNER_IP:3478
-NEXT_PUBLIC_TURN_USERNAME=HippiChat
-NEXT_PUBLIC_TURN_CREDENTIAL=your_turn_password
+# Cloudflare TURN (managed)
+CLOUDFLARE_TURN_TOKEN_ID=your_cloudflare_turn_token_id
+CLOUDFLARE_TURN_API_TOKEN=your_cloudflare_turn_api_token
+TURN_CREDENTIAL_TTL_SECONDS=3600
 
 # Ads
 NEXT_PUBLIC_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
@@ -779,26 +779,12 @@ const nextConfig = {
 };
 module.exports = nextConfig;
 
-FILE: Coturn setup script (coturn-setup.sh) for Hetzner:
-#!/bin/bash
-apt-get update && apt-get install -y coturn
-cat > /etc/turnserver.conf << EOF
-listening-port=3478
-tls-listening-port=5349
-listening-ip=YOUR_SERVER_IP
-external-ip=YOUR_SERVER_IP
-relay-ip=YOUR_SERVER_IP
-realm=HippiChat.app
-server-name=HippiChat.app
-lt-cred-mech
-user=HippiChat:YOUR_PASSWORD
-fingerprint
-no-loopback-peers
-no-multicast-peers
-syslog
-pidfile=/var/run/turnserver.pid
-EOF
-systemctl enable coturn && systemctl start coturn
+Cloudflare TURN credential generation example:
+curl \
+	-H "Authorization: Bearer YOUR_CLOUDFLARE_TURN_API_TOKEN" \
+	-H "Content-Type: application/json" \
+	-d '{"ttl":3600}' \
+	https://rtc.live.cloudflare.com/v1/turn/keys/YOUR_CLOUDFLARE_TURN_TOKEN_ID/credentials/generate-ice-servers
 
 Write a complete README.md with:
 1. Prerequisites list
@@ -839,7 +825,7 @@ Write a complete README.md with:
 - **URL:** https://hetzner.com/cloud
 - **Steps:** Register → Create server → Choose CX21 (2vCPU, 4GB RAM) → Select Nuremberg or Helsinki → Ubuntu 22.04 → Add your SSH key
 - **Cost:** €3.29/month (~₹295/month) — includes 20TB outbound bandwidth FREE
-- **What runs here:** Node.js signaling server (PM2) + Coturn TURN server
+- **What runs here:** Node.js signaling server (PM2); TURN relaying is handled by Cloudflare
 
 ### 6. Hostinger VPS (Frontend + Backend Hosting)
 - **URL:** https://www.hostinger.com/vps-hosting

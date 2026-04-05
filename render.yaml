@@ -31,12 +31,10 @@ services:
         value: HippiChat
       - key: CORS_ORIGINS
         value: https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000
-      - key: COTURN_STATIC_AUTH_SECRET
+      - key: CLOUDFLARE_TURN_TOKEN_ID
         sync: false
-      - key: TURN_HOST
-        value: turn.hippichat.com
-      - key: TURN_PORT
-        value: 3478
+      - key: CLOUDFLARE_TURN_API_TOKEN
+        sync: false
       - key: TURN_CREDENTIAL_TTL_SECONDS
         value: 3600
       - key: NEXT_PUBLIC_MONETAG_ZONE_WAITING

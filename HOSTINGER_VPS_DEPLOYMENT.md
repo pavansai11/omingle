@@ -55,10 +55,11 @@ At minimum, set:
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
 - `CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com`
-- `COTURN_STATIC_AUTH_SECRET`
-- `TURN_HOST=turn.hippichat.com`
-- `TURN_PORT=3478`
+- `CLOUDFLARE_TURN_TOKEN_ID`
+- `CLOUDFLARE_TURN_API_TOKEN`
 - `TURN_CREDENTIAL_TTL_SECONDS=3600`
+
+Cloudflare TURN now handles relay credentials for WebRTC, so you do **not** need to run a separate self-hosted TURN service on this VPS.
 
 ## 6. Build and start with PM2
 

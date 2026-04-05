@@ -105,27 +105,50 @@ function normalizeLangCode(lang) {
   return lower;
 }
 
-function getTurnCredentialPayload(identity = 'guest') {
-  const secret = process.env.COTURN_STATIC_AUTH_SECRET;
-  if (!secret) {
-    throw new Error('COTURN_STATIC_AUTH_SECRET is not configured');
+async function getTurnCredentialPayload() {
+  const tokenId = process.env.CLOUDFLARE_TURN_TOKEN_ID;
+  const apiToken = process.env.CLOUDFLARE_TURN_API_TOKEN;
+  const ttlSeconds = Number(process.env.TURN_CREDENTIAL_TTL_SECONDS || 3600);
+
+  if (!tokenId) {
+    throw new Error('CLOUDFLARE_TURN_TOKEN_ID is not configured');
   }
 
-  const host = process.env.NEXT_PUBLIC_TURN_HOST || process.env.TURN_HOST || 'turn.hippichat.com';
-  const port = Number(process.env.NEXT_PUBLIC_TURN_PORT || process.env.TURN_PORT || 3478);
-  const ttlSeconds = Number(process.env.TURN_CREDENTIAL_TTL_SECONDS || 3600);
-  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const username = `${expiresAt}:${identity}`;
-  const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
+  if (!apiToken) {
+    throw new Error('CLOUDFLARE_TURN_API_TOKEN is not configured');
+  }
+
+  const response = await fetch(
+    `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(tokenId)}/credentials/generate-ice-servers`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ttl: ttlSeconds }),
+    }
+  );
+
+  const data = await response.json().catch(() => null);
+  const iceServers = Array.isArray(data?.iceServers)
+    ? data.iceServers
+    : Array.isArray(data?.result?.iceServers)
+      ? data.result.iceServers
+      : null;
+
+  if (!response.ok) {
+    throw new Error(`Cloudflare TURN API request failed with status ${response.status}: ${JSON.stringify(data)}`);
+  }
+
+  if (!iceServers?.length) {
+    throw new Error('Cloudflare TURN API returned no iceServers');
+  }
 
   return {
-    username,
-    credential,
+    iceServers,
     ttlSeconds,
-    urls: [
-      `turn:${host}:${port}?transport=udp`,
-      `turn:${host}:${port}?transport=tcp`,
-    ],
+    provider: 'cloudflare',
   };
 }
 
@@ -148,10 +171,7 @@ export async function GET(request, { params }) {
 
   if (path === 'turn-credentials') {
     try {
-      const sessionId = request.cookies.get(getSessionCookieName())?.value;
-      const session = await getUserSession(sessionId);
-      const identity = session?.user?.id || session?.user?.googleId || crypto.randomUUID();
-      return NextResponse.json(getTurnCredentialPayload(identity));
+      return NextResponse.json(await getTurnCredentialPayload());
     } catch (error) {
       console.error('[TURN] Failed to issue TURN credentials:', error);
       return NextResponse.json({ error: 'TURN credentials unavailable' }, { status: 500 });

@@ -451,14 +451,12 @@ function ChatPageContent() {
       try {
         const res = await fetch(TURN_CREDENTIALS_ENDPOINT, { cache: 'no-store' })
         const data = await res.json()
-        if (!cancelled && res.ok && Array.isArray(data?.urls) && data?.username && data?.credential) {
-          setTurnIceServers([
-            {
-              urls: data.urls,
-              username: data.username,
-              credential: data.credential,
-            },
-          ])
+        const iceServers = Array.isArray(data?.iceServers)
+          ? data.iceServers.filter((server) => server && (Array.isArray(server.urls) || typeof server.urls === 'string'))
+          : []
+
+        if (!cancelled) {
+          setTurnIceServers(res.ok ? iceServers : [])
         }
       } catch (error) {
         if (!cancelled) {

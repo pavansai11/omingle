@@ -91,13 +91,14 @@ REDIS_URL=YOUR_UPSTASH_TCP_REDIS_URL
 UPSTASH_REDIS_REST_URL=YOUR_UPSTASH_REST_URL
 UPSTASH_REDIS_REST_TOKEN=YOUR_UPSTASH_REST_TOKEN
 CORS_ORIGINS=https://hippichat.com,https://www.hippichat.com,http://localhost:3000,http://127.0.0.1:3000
-COTURN_STATIC_AUTH_SECRET=YOUR_COTURN_SHARED_SECRET
-TURN_HOST=turn.hippichat.com
-TURN_PORT=3478
+CLOUDFLARE_TURN_TOKEN_ID=YOUR_CLOUDFLARE_TURN_TOKEN_ID
+CLOUDFLARE_TURN_API_TOKEN=YOUR_CLOUDFLARE_TURN_API_TOKEN
 TURN_CREDENTIAL_TTL_SECONDS=3600
 ```
 
 Do **not** commit real secrets to GitHub. Keep them only in Render.
+
+Cloudflare TURN replaces the old self-hosted TURN relay, so Render only needs the Cloudflare token ID/API token pair plus the TTL setting.
 
 ---
 
