@@ -131,7 +131,7 @@ function ControlButtons({
 
 function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
   return (
-    <div className={className}>
+    <div className={`w-full overflow-hidden ${className}`.trim()}>
       <script
         dangerouslySetInnerHTML={{
           __html: `atOptions = { key: '${adKey}', format: 'iframe', height: ${height}, width: ${width}, params: {} };`,
@@ -2270,7 +2270,7 @@ function ChatPageContent() {
               <div className="grid flex-1 min-h-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex min-h-0 flex-col gap-3">
                   <div className="relative w-full rounded-2xl border border-gray-800 bg-gray-900/60 p-2 sm:p-3 overflow-hidden">
-                    <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
+                    <div className="relative w-full aspect-[16/11] sm:aspect-[4/3] rounded-xl overflow-hidden bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
                       <video
                         ref={remoteVideoRef}
                         autoPlay
@@ -2310,7 +2310,7 @@ function ChatPageContent() {
 
                 <div className="flex min-h-0 flex-col gap-3">
                   <div className="relative w-full rounded-2xl border border-gray-800 bg-gray-900/60 p-2 sm:p-3 overflow-hidden">
-                    <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
+                    <div className="relative w-full aspect-[16/11] sm:aspect-[4/3] rounded-xl overflow-hidden bg-black shadow-[0_0_0_1px_rgba(255,255,255,0.05)]">
                       <canvas ref={blurCanvasRef} className="hidden" />
                       <video
                         ref={localVideoRef}
@@ -2391,28 +2391,6 @@ function ChatPageContent() {
           {connectionNotice && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">
               {connectionNotice}
-            </div>
-          )}
-
-          {isSearching && (
-            <div className="absolute bottom-4 left-1/2 z-20 w-[calc(100%-2rem)] max-w-[760px] -translate-x-1/2 rounded-2xl border border-gray-800 bg-gray-900/92 p-3 backdrop-blur">
-              <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
-              <div className="hidden justify-center sm:flex">
-                <AdsterraBanner
-                  scriptId="searching-banner-desktop"
-                  adKey="e3e6994248a1e5d1857a761f698ba4f5"
-                  width={728}
-                  height={90}
-                />
-              </div>
-              <div className="flex justify-center sm:hidden">
-                <AdsterraBanner
-                  scriptId="searching-banner-mobile"
-                  adKey="136ca117e40190a371bbc86e466823b3"
-                  width={320}
-                  height={50}
-                />
-              </div>
             </div>
           )}
 
@@ -2814,20 +2792,6 @@ function ChatPageContent() {
           </div>
         </div>
 
-        <div className="hidden xl:flex w-[360px] shrink-0 flex-col justify-end border-l border-gray-800 bg-gray-900/80 p-4">
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/95 p-3">
-            <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
-            <div className="flex justify-center">
-              <AdsterraBanner
-                scriptId="chat-bottom-banner-desktop"
-                adKey="e3e6994248a1e5d1857a761f698ba4f5"
-                width={728}
-                height={90}
-                className="scale-[0.48] origin-center"
-              />
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Mobile Control Bar */}
@@ -2853,6 +2817,34 @@ function ChatPageContent() {
             </span>
           )}
         </button>
+
+        <div className="mt-4 overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/95 p-3">
+          <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
+          <div className="flex w-full justify-center overflow-hidden">
+            <AdsterraBanner
+              scriptId={isSearching ? 'searching-banner-mobile' : 'chat-bottom-banner-mobile'}
+              adKey="136ca117e40190a371bbc86e466823b3"
+              width={320}
+              height={50}
+              className="flex w-full justify-center"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="hidden border-t border-gray-800 bg-gray-900/80 px-4 py-4 sm:block">
+        <div className="mx-auto w-full max-w-[1400px] overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/95 p-3">
+          <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
+          <div className="flex w-full justify-center overflow-hidden">
+            <AdsterraBanner
+              scriptId={isSearching ? 'searching-banner-desktop' : 'chat-bottom-banner-desktop'}
+              adKey="e3e6994248a1e5d1857a761f698ba4f5"
+              width={728}
+              height={90}
+              className="flex w-full justify-center"
+            />
+          </div>
+        </div>
       </div>
     </div>
   )

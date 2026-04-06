@@ -8,7 +8,7 @@ import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Load
 
 function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
   return (
-    <div className={className}>
+    <div className={`w-full overflow-hidden ${className}`.trim()}>
       <Script
         id={`${scriptId}-config`}
         strategy="afterInteractive"
@@ -208,6 +208,24 @@ export default function HomePage() {
               </div>
             </div>
 
+            <section className="mt-10 w-full max-w-xl text-left">
+              <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
+                  Sponsored
+                </p>
+                <div className="mx-auto w-full max-w-[320px] overflow-hidden rounded-xl">
+                  <Script
+                    id="adsterra-native-bar"
+                    src="https://pl29014129.profitablecpmratenetwork.com/2d45ed9f6a976f07c6f4182a2e2b5428/invoke.js"
+                    strategy="afterInteractive"
+                    async
+                    data-cfasync="false"
+                  />
+                  <div id="container-2d45ed9f6a976f07c6f4182a2e2b5428" />
+                </div>
+              </div>
+            </section>
+
             <button
               onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
@@ -220,22 +238,6 @@ export default function HomePage() {
             <p className="text-sm text-gray-500 mt-4">
               Google sign-in required • Video + voice chat • Friends and history built in
             </p>
-
-            <section className="mt-10 w-full max-w-4xl space-y-6 text-left">
-              <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
-                  Sponsored
-                </p>
-                <Script
-                  id="adsterra-native-bar"
-                  src="https://pl29014129.profitablecpmratenetwork.com/2d45ed9f6a976f07c6f4182a2e2b5428/invoke.js"
-                  strategy="afterInteractive"
-                  async
-                  data-cfasync="false"
-                />
-                <div id="container-2d45ed9f6a976f07c6f4182a2e2b5428" />
-              </div>
-            </section>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
@@ -253,22 +255,24 @@ export default function HomePage() {
               ))}
             </div>
 
-            <section className="mt-12 w-full max-w-4xl rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+            <section className="mt-12 w-full max-w-4xl overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
               <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
-              <div className="hidden justify-center sm:flex">
+              <div className="hidden w-full justify-center overflow-hidden sm:flex">
                 <AdsterraBanner
                   scriptId="homepage-bottom-banner-desktop"
                   adKey="e3e6994248a1e5d1857a761f698ba4f5"
                   width={728}
                   height={90}
+                  className="flex w-full justify-center"
                 />
               </div>
-              <div className="flex justify-center sm:hidden">
+              <div className="flex w-full justify-center overflow-hidden sm:hidden">
                 <AdsterraBanner
                   scriptId="homepage-bottom-banner-mobile"
                   adKey="136ca117e40190a371bbc86e466823b3"
                   width={320}
                   height={50}
+                  className="flex w-full justify-center"
                 />
               </div>
             </section>
