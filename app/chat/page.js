@@ -2714,10 +2714,11 @@ function ChatPageContent() {
           </div>
         </div>
       )}
-        {/* Text Chat Sidebar */}
-        <div className={`${showChat ? 'w-full sm:w-80 lg:w-96' : 'hidden sm:block sm:w-80 lg:w-96'} flex h-full min-h-0 flex-col overflow-hidden bg-gray-900 border-l border-gray-800`}>
-          {/* Chat header */}
-          <div className="shrink-0 px-4 py-3 border-b border-gray-800 bg-gray-900 flex items-center justify-between">
+      {/* Text Chat Sidebar */}
+      <div className={`${showChat ? 'flex w-full h-full flex-1 sm:w-80 lg:w-96' : 'hidden sm:flex sm:w-80 lg:w-96'} min-h-0 flex-col overflow-hidden border-l border-gray-800 bg-gray-900`}>
+        {/* Chat header */}
+        <div className="shrink-0 border-b border-gray-800 bg-gray-900 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-gray-400" />
               <span className="text-sm font-medium">Text Chat</span>
@@ -2726,7 +2727,9 @@ function ChatPageContent() {
               <X className="w-4 h-4" />
             </button>
           </div>
+        </div>
 
+        <div className="flex min-h-0 h-0 flex-1 flex-col overflow-hidden">
           {/* Messages */}
           <div
             ref={chatScrollRef}
@@ -2737,36 +2740,38 @@ function ChatPageContent() {
             onTouchMove={() => {
               shouldAutoScrollRef.current = false
             }}
-            className="flex-1 min-h-0 h-0 overflow-y-auto overscroll-contain px-4 py-3 pb-24 sm:pb-6 space-y-3"
+            className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3"
           >
-            {messages.length === 0 && (
-              <div className="text-center text-gray-500 text-sm mt-8">
-                <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                <p>{canSendMessages ? 'Send a message to start chatting!' : 'Match with someone to start chatting.'}</p>
-              </div>
-            )}
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex ${msg.isMine ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 ${msg.isMine
-                  ? 'bg-violet-600 text-white rounded-br-sm'
-                  : 'bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
-                  <p className="text-sm">{msg.text}</p>
-                  <p className={`text-[10px] mt-1 ${msg.isMine ? 'text-violet-300' : 'text-gray-500'}`}>
-                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
+            <div className="space-y-3 pr-1">
+              {messages.length === 0 && (
+                <div className="mt-8 text-center text-sm text-gray-500">
+                  <MessageSquare className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                  <p>{canSendMessages ? 'Send a message to start chatting!' : 'Match with someone to start chatting.'}</p>
                 </div>
-              </div>
-            ))}
-            {isPartnerTyping && (
-              <div className="flex justify-start">
-                <div className="bg-gray-800 rounded-2xl rounded-bl-sm px-3.5 py-2.5 flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-1" />
-                  <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-2" />
-                  <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-3" />
+              )}
+              {messages.map((msg) => (
+                <div key={msg.id} className={`flex ${msg.isMine ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[80%] break-words rounded-2xl px-3.5 py-2 ${msg.isMine
+                    ? 'bg-violet-600 text-white rounded-br-sm'
+                    : 'bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
+                    <p className="text-sm">{msg.text}</p>
+                    <p className={`mt-1 text-[10px] ${msg.isMine ? 'text-violet-300' : 'text-gray-500'}`}>
+                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
+              ))}
+              {isPartnerTyping && (
+                <div className="flex justify-start">
+                  <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-gray-800 px-3.5 py-2.5">
+                    <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-1" />
+                    <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-2" />
+                    <div className="w-2 h-2 rounded-full bg-gray-500 bounce-dot-3" />
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
           </div>
 
           {/* Chat input */}
@@ -2779,18 +2784,19 @@ function ChatPageContent() {
                 onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
                 placeholder={canSendMessages ? 'Type a message...' : 'Match with someone to chat'}
                 disabled={!canSendMessages}
-                className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50"
+                className="flex-1 rounded-xl border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500/50"
               />
               <button
                 onClick={handleSendMessage}
                 disabled={!canSendMessages || !messageInput.trim()}
-                className="p-2.5 bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-xl transition-all"
+                className="rounded-xl bg-violet-600 p-2.5 transition-all hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500"
               >
                 <Send className="w-4 h-4" />
               </button>
             </div>
           </div>
         </div>
+      </div>
 
       </div>
 
@@ -2836,13 +2842,15 @@ function ChatPageContent() {
         <div className="mx-auto w-full max-w-[1400px] overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/95 p-3">
           <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
           <div className="flex w-full justify-center overflow-hidden">
-            <AdsterraBanner
-              scriptId={isSearching ? 'searching-banner-desktop' : 'chat-bottom-banner-desktop'}
-              adKey="e3e6994248a1e5d1857a761f698ba4f5"
-              width={728}
-              height={90}
-              className="flex w-full justify-center"
-            />
+            <div className="mx-auto flex w-[728px] max-w-full justify-center overflow-hidden">
+              <AdsterraBanner
+                scriptId={isSearching ? 'searching-banner-desktop' : 'chat-bottom-banner-desktop'}
+                adKey="e3e6994248a1e5d1857a761f698ba4f5"
+                width={728}
+                height={90}
+                className="flex w-[728px] max-w-full justify-center"
+              />
+            </div>
           </div>
         </div>
       </div>
