@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Script from 'next/script'
 import GoogleAuthButton from '@/components/google-auth-button'
-import GoogleSponsoredAd from '@/components/google-sponsored-ad'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
 const HERO_PHRASES = [
@@ -189,12 +189,6 @@ export default function HomePage() {
               </div>
             </div>
 
-            <GoogleSponsoredAd
-              label="Sponsored"
-              className="mb-8 w-full max-w-2xl"
-              minHeightClassName="min-h-[128px]"
-            />
-
             <button
               onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
@@ -207,6 +201,36 @@ export default function HomePage() {
             <p className="text-sm text-gray-500 mt-4">
               Google sign-in required • Video + voice chat • Friends and history built in
             </p>
+
+            <section className="mt-10 w-full max-w-4xl space-y-6 text-left">
+              <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
+                  Adsterra Social Bar (preview)
+                </p>
+                <Script
+                  id="adsterra-social-bar"
+                  src="https://pl29014130.profitablecpmratenetwork.com/da/5c/87/da5c877dc7f9368e770a25c2de59554b.js"
+                  strategy="afterInteractive"
+                />
+                <p className="text-xs text-gray-500">
+                  Loads via external script. Behavior can vary by device/geo.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
+                  Adsterra Native Bar (preview)
+                </p>
+                <Script
+                  id="adsterra-native-bar"
+                  src="https://pl29014129.profitablecpmratenetwork.com/2d45ed9f6a976f07c6f4182a2e2b5428/invoke.js"
+                  strategy="afterInteractive"
+                  async
+                  data-cfasync="false"
+                />
+                <div id="container-2d45ed9f6a976f07c6f4182a2e2b5428" />
+              </div>
+            </section>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
@@ -224,13 +248,6 @@ export default function HomePage() {
               ))}
             </div>
 
-            <GoogleSponsoredAd
-              label="Sponsored"
-              adSlot="8193616179"
-              adClassName=""
-              className="mt-12 w-full max-w-4xl"
-              minHeightClassName="min-h-[140px]"
-            />
           </main>
         </div>
         {renderAuthGate()}
