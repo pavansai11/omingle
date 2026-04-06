@@ -6,6 +6,25 @@ import Script from 'next/script'
 import GoogleAuthButton from '@/components/google-auth-button'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
+function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
+  return (
+    <div className={className}>
+      <Script
+        id={`${scriptId}-config`}
+        strategy="afterInteractive"
+        dangerouslySetInnerHTML={{
+          __html: `atOptions = { key: '${adKey}', format: 'iframe', height: ${height}, width: ${width}, params: {} };`,
+        }}
+      />
+      <Script
+        id={`${scriptId}-invoke`}
+        src={`https://theoreticalassertshame.com/${adKey}/invoke.js`}
+        strategy="afterInteractive"
+      />
+    </div>
+  )
+}
+
 const HERO_PHRASES = [
   { text: 'Meet strangers', hint: 'Live worldwide' },
   { text: 'Video or voice', hint: 'Your choice' },
@@ -205,21 +224,7 @@ export default function HomePage() {
             <section className="mt-10 w-full max-w-4xl space-y-6 text-left">
               <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
                 <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
-                  Adsterra Social Bar (preview)
-                </p>
-                <Script
-                  id="adsterra-social-bar"
-                  src="https://pl29014130.profitablecpmratenetwork.com/da/5c/87/da5c877dc7f9368e770a25c2de59554b.js"
-                  strategy="afterInteractive"
-                />
-                <p className="text-xs text-gray-500">
-                  Loads via external script. Behavior can vary by device/geo.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
-                  Adsterra Native Bar (preview)
+                  Sponsored
                 </p>
                 <Script
                   id="adsterra-native-bar"
@@ -247,6 +252,26 @@ export default function HomePage() {
                 </div>
               ))}
             </div>
+
+            <section className="mt-12 w-full max-w-4xl rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
+              <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
+              <div className="hidden justify-center sm:flex">
+                <AdsterraBanner
+                  scriptId="homepage-bottom-banner-desktop"
+                  adKey="e3e6994248a1e5d1857a761f698ba4f5"
+                  width={728}
+                  height={90}
+                />
+              </div>
+              <div className="flex justify-center sm:hidden">
+                <AdsterraBanner
+                  scriptId="homepage-bottom-banner-mobile"
+                  adKey="136ca117e40190a371bbc86e466823b3"
+                  width={320}
+                  height={50}
+                />
+              </div>
+            </section>
 
           </main>
         </div>

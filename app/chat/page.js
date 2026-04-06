@@ -129,6 +129,19 @@ function ControlButtons({
   )
 }
 
+function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
+  return (
+    <div className={className}>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `atOptions = { key: '${adKey}', format: 'iframe', height: ${height}, width: ${width}, params: {} };`,
+        }}
+      />
+      <script src={`https://theoreticalassertshame.com/${adKey}/invoke.js`} />
+    </div>
+  )
+}
+
 function ChatPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -2293,25 +2306,6 @@ function ChatPageContent() {
                       )}
                     </div>
                   </div>
-                  {connectionState === 'connected' && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={handleLikePartner}
-                        disabled={hasLikedPartner}
-                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-500/15 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <ThumbsUp className="h-4 w-4" /> {hasLikedPartner ? 'Liked' : 'Like'}
-                      </button>
-                      <button
-                        onClick={() => openReportModal()}
-                        disabled={hasReportedPartner}
-                        className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/15 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Flag className="h-4 w-4" /> {hasReportedPartner ? 'Reported' : 'Report'}
-                      </button>
-                    </div>
-                  )}
-
                 </div>
 
                 <div className="flex min-h-0 flex-col gap-3">
@@ -2397,6 +2391,28 @@ function ChatPageContent() {
           {connectionNotice && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">
               {connectionNotice}
+            </div>
+          )}
+
+          {isSearching && (
+            <div className="absolute bottom-4 left-1/2 z-20 w-[calc(100%-2rem)] max-w-[760px] -translate-x-1/2 rounded-2xl border border-gray-800 bg-gray-900/92 p-3 backdrop-blur">
+              <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
+              <div className="hidden justify-center sm:flex">
+                <AdsterraBanner
+                  scriptId="searching-banner-desktop"
+                  adKey="e3e6994248a1e5d1857a761f698ba4f5"
+                  width={728}
+                  height={90}
+                />
+              </div>
+              <div className="flex justify-center sm:hidden">
+                <AdsterraBanner
+                  scriptId="searching-banner-mobile"
+                  adKey="136ca117e40190a371bbc86e466823b3"
+                  width={320}
+                  height={50}
+                />
+              </div>
             </div>
           )}
 
@@ -2509,6 +2525,13 @@ function ChatPageContent() {
                               {alreadyFriend ? 'Friend Added' : pendingOutgoing ? 'Request Sent' : 'Add Friend'}
                             </button>
                           )}
+                          <button
+                            onClick={handleLikePartner}
+                            disabled={hasLikedPartner || !targetUserId || item.id !== currentMatchHistoryIdRef.current}
+                            className="inline-flex items-center gap-1 rounded-md bg-emerald-600/20 border border-emerald-500/30 px-2 py-1 text-[11px] font-medium text-emerald-200 disabled:opacity-40"
+                          >
+                            <ThumbsUp className="h-3 w-3" /> {hasLikedPartner && item.id === currentMatchHistoryIdRef.current ? 'Liked' : 'Like'}
+                          </button>
                           <button
                             onClick={() => openReportModal({ targetUserId, roomId: item.roomId || null, isCurrent: false })}
                             disabled={!targetUserId}
@@ -2787,6 +2810,21 @@ function ChatPageContent() {
               >
                 <Send className="w-4 h-4" />
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="hidden xl:flex w-[360px] shrink-0 flex-col justify-end border-l border-gray-800 bg-gray-900/80 p-4">
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/95 p-3">
+            <p className="mb-2 text-center text-[10px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
+            <div className="flex justify-center">
+              <AdsterraBanner
+                scriptId="chat-bottom-banner-desktop"
+                adKey="e3e6994248a1e5d1857a761f698ba4f5"
+                width={728}
+                height={90}
+                className="scale-[0.48] origin-center"
+              />
             </div>
           </div>
         </div>
