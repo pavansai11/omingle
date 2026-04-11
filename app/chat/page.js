@@ -4,6 +4,8 @@ import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'rea
 import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
+import AgeGateModal from '@/components/age-gate-modal'
+import SiteFooter from '@/components/site-footer'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
@@ -2015,7 +2017,9 @@ function ChatPageContent() {
 
   // =================== UNIFIED CHAT LAYOUT ===================
   return (
-    <div className="h-[100dvh] min-h-[100dvh] max-h-[100dvh] bg-gray-950 flex flex-col overflow-hidden overscroll-none">
+    <div className="min-h-screen bg-gray-950 flex flex-col">
+      <AgeGateModal />
+      <div className="h-[100dvh] min-h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden overscroll-none bg-gray-950">
       <div className="relative z-30 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-3">
         <div className="flex items-center justify-between gap-3">
           <button onClick={() => router.push('/')} className="flex items-center">
@@ -2854,6 +2858,8 @@ function ChatPageContent() {
           </div>
         </div>
       </div>
+      </div>
+      <SiteFooter />
     </div>
   )
 }

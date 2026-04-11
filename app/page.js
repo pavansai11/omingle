@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Script from 'next/script'
 import GoogleAuthButton from '@/components/google-auth-button'
+import SiteFooter from '@/components/site-footer'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
 
 function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
@@ -152,11 +153,11 @@ export default function HomePage() {
 
   if (step === 'landing') {
     return (
-      <div className="min-h-screen relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-950 via-violet-950/20 to-gray-950" />
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-violet-600/10 rounded-full blur-3xl" />
+      <div className="min-h-screen relative overflow-hidden flex flex-col bg-gray-950">
+        <div className="pointer-events-none absolute inset-0 bg-gray-950" />
+        <div className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-violet-600/8 rounded-full blur-3xl" />
 
-        <div className="relative z-10">
+        <div className="relative z-10 flex-1 bg-transparent">
           <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <button onClick={() => router.push('/')} className="flex items-center">
               <img src="/logo.svg" alt="HippiChat" className="h-10 sm:h-11 w-auto" />
@@ -280,6 +281,7 @@ export default function HomePage() {
           </main>
         </div>
         {renderAuthGate()}
+        <SiteFooter />
       </div>
     )
   }
