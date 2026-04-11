@@ -160,7 +160,7 @@ export default function HomePage() {
         <div className="relative z-10 flex-1 bg-transparent">
           <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <button onClick={() => router.push('/')} className="flex items-center">
-              <img src="/logo.svg" alt="HippiChat" className="h-10 sm:h-11 w-auto" />
+              <img src="/logo.svg" alt="HippiChat" className="h-12 sm:h-14 md:h-16 w-auto" />
             </button>
             {sessionLoading ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs text-gray-300">

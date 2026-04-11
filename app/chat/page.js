@@ -5,7 +5,6 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import AgeGateModal from '@/components/age-gate-modal'
-import SiteFooter from '@/components/site-footer'
 import { ALL_LANGUAGES, getLanguageByCode } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
@@ -2859,7 +2858,6 @@ function ChatPageContent() {
         </div>
       </div>
       </div>
-      <SiteFooter />
     </div>
   )
 }

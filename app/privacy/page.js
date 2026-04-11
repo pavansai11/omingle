@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import SiteFooter from '@/components/site-footer'
 
 export const metadata = {
@@ -8,6 +9,11 @@ export const metadata = {
 export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+        <Link href="/" className="flex items-center">
+          <img src="/logo.svg" alt="HippiChat" className="h-12 sm:h-14 w-auto" />
+        </Link>
+      </nav>
       <main className="mx-auto max-w-4xl px-6 py-12 sm:py-16">
         <div className="rounded-3xl border border-white/10 bg-gray-950 p-6 sm:p-10 shadow-2xl">
           <h1 className="text-3xl font-bold sm:text-4xl">Privacy Policy</h1>
