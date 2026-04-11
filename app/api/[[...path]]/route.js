@@ -7,6 +7,95 @@ const memoryAdEngagement = new Map();
 const AD_GATE_MIN_MS = 0;
 const AD_GATE_MAX_MS = 10 * 60 * 1000;
 const ALLOWED_GATE_REASONS = new Set(['skip', 'add-friend', 'filters']);
+const ALLOWED_GOOGLE_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com']);
+const MAX_NAME_LENGTH = 60;
+const MAX_IMAGE_URL_LENGTH = 500;
+const MAX_LANGUAGE_CODE_LENGTH = 32;
+const MAX_TRANSLATION_TEXT_LENGTH = 500;
+
+function getAllowedOrigins() {
+  const raw = process.env.CORS_ORIGINS || '';
+  const parsed = raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+  if (parsed.length) return parsed;
+  return [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    process.env.NEXT_PUBLIC_BASE_URL || 'https://hippichat.com',
+  ].filter(Boolean);
+}
+
+function buildCorsHeaders(request) {
+  const allowedOrigins = new Set(getAllowedOrigins());
+  const requestOrigin = request.headers.get('origin');
+  const allowOrigin = requestOrigin && allowedOrigins.has(requestOrigin)
+    ? requestOrigin
+    : getAllowedOrigins()[0] || 'https://hippichat.com';
+
+  return {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
+  };
+}
+
+function validateStateChangingRequest(request) {
+  const origin = request.headers.get('origin');
+  const host = request.headers.get('host');
+  if (!origin || !host) return true;
+
+  try {
+    const originUrl = new URL(origin);
+    return originUrl.host === host || getAllowedOrigins().includes(originUrl.origin);
+  } catch (error) {
+    return false;
+  }
+}
+
+function sanitizeString(value, maxLength) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeLanguageSelection(language) {
+  if (!language || typeof language !== 'object') return undefined;
+  const code = sanitizeString(language.code, MAX_LANGUAGE_CODE_LENGTH);
+  if (!code) return undefined;
+  return {
+    code,
+    name: sanitizeString(language.name, 80) || code,
+    flag: sanitizeString(language.flag, 12) || '🌐',
+  };
+}
+
+function sanitizeLanguageSelections(languages) {
+  if (!Array.isArray(languages)) return undefined;
+  return languages
+    .map((language) => sanitizeLanguageSelection(language))
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function sanitizeImageUrl(value) {
+  const trimmed = sanitizeString(value, MAX_IMAGE_URL_LENGTH);
+  if (typeof trimmed === 'undefined') return undefined;
+  if (!trimmed) return '';
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
+function sanitizeCountryField(value, maxLength) {
+  const trimmed = sanitizeString(value, maxLength);
+  return typeof trimmed === 'undefined' ? undefined : trimmed;
+}
 
 async function resolveAuthenticatedUser(request) {
   const sessionId = request.cookies.get(getSessionCookieName())?.value;
@@ -199,6 +288,10 @@ export async function POST(request, { params }) {
   const pathSegments = params?.path || [];
   const path = pathSegments.join('/');
 
+  if (!validateStateChangingRequest(request)) {
+    return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 });
+  }
+
   if (path === 'profile') {
     try {
       const sessionId = request.cookies.get(getSessionCookieName())?.value;
@@ -208,28 +301,40 @@ export async function POST(request, { params }) {
       }
 
       const { name, primaryLanguage, additionalLanguages, customImage, countryCode, countryName, countryFlag } = await request.json();
-      const hasName = typeof name === 'string' && !!name.trim();
-      const hasPrimaryLanguage = !!primaryLanguage;
-      const hasAdditionalLanguages = Array.isArray(additionalLanguages);
-      const hasCustomImage = typeof customImage === 'string';
-      const hasCountry = typeof countryName === 'string' || typeof countryFlag === 'string' || typeof countryCode === 'string';
+      const safeName = sanitizeString(name, MAX_NAME_LENGTH);
+      const safePrimaryLanguage = sanitizeLanguageSelection(primaryLanguage);
+      const safeAdditionalLanguages = sanitizeLanguageSelections(additionalLanguages);
+      const safeCustomImage = sanitizeImageUrl(customImage);
+      const safeCountryCode = sanitizeCountryField(countryCode, 8);
+      const safeCountryName = sanitizeCountryField(countryName, 80);
+      const safeCountryFlag = sanitizeCountryField(countryFlag, 12);
+
+      if (safeCustomImage === null) {
+        return NextResponse.json({ error: 'Profile photo URL must be a valid HTTPS URL' }, { status: 400 });
+      }
+
+      const hasName = typeof safeName === 'string' && !!safeName;
+      const hasPrimaryLanguage = !!safePrimaryLanguage;
+      const hasAdditionalLanguages = typeof safeAdditionalLanguages !== 'undefined';
+      const hasCustomImage = typeof safeCustomImage === 'string';
+      const hasCountry = typeof safeCountryName === 'string' || typeof safeCountryFlag === 'string' || typeof safeCountryCode === 'string';
 
       if (!hasName && !hasPrimaryLanguage && !hasAdditionalLanguages && !hasCustomImage && !hasCountry) {
         return NextResponse.json({ error: 'At least one profile field is required' }, { status: 400 });
       }
 
       const user = await updateUserProfile(session.user.id, {
-        name,
-        primaryLanguage,
-        additionalLanguages,
-        customImage,
-        countryCode,
-        countryName,
-        countryFlag,
+        name: safeName,
+        primaryLanguage: safePrimaryLanguage,
+        additionalLanguages: safeAdditionalLanguages,
+        customImage: safeCustomImage,
+        countryCode: safeCountryCode,
+        countryName: safeCountryName,
+        countryFlag: safeCountryFlag,
       });
       return NextResponse.json({ user });
     } catch (error) {
-      console.error('[Profile] Update failed:', error);
+      console.error('[Profile] Update failed');
       return NextResponse.json({ error: 'Profile update failed' }, { status: 500 });
     }
   }
@@ -237,8 +342,9 @@ export async function POST(request, { params }) {
   if (path === 'auth/google') {
     try {
       const { credential } = await request.json();
+      const safeCredential = sanitizeString(credential, 4096);
 
-      if (!credential) {
+      if (!safeCredential) {
         return NextResponse.json({ error: 'Missing Google credential' }, { status: 400 });
       }
 
@@ -247,18 +353,23 @@ export async function POST(request, { params }) {
         return NextResponse.json({ error: 'Google sign-in is not configured' }, { status: 500 });
       }
 
-      const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+      const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(safeCredential)}`);
       const verifyData = await verifyRes.json();
 
       if (!verifyRes.ok) {
-        return NextResponse.json({
-          error: 'Invalid Google token',
-          details: verifyData?.error_description || verifyData?.error || null,
-        }, { status: 401 });
+        return NextResponse.json({ error: 'Invalid Google token' }, { status: 401 });
       }
 
       if (verifyData.aud !== expectedAudience) {
         return NextResponse.json({ error: 'Google token audience mismatch' }, { status: 401 });
+      }
+
+      if (!ALLOWED_GOOGLE_ISSUERS.has(verifyData.iss)) {
+        return NextResponse.json({ error: 'Google token issuer mismatch' }, { status: 401 });
+      }
+
+      if (verifyData.email_verified !== 'true') {
+        return NextResponse.json({ error: 'Google account email is not verified' }, { status: 401 });
       }
 
       const user = await upsertGoogleUser(verifyData);
@@ -277,7 +388,7 @@ export async function POST(request, { params }) {
 
       return response;
     } catch (error) {
-      console.error('[Auth] Google sign-in failed:', error);
+      console.error('[Auth] Google sign-in failed');
       return NextResponse.json({ error: 'Google sign-in failed' }, { status: 500 });
     }
   }
@@ -313,7 +424,7 @@ export async function POST(request, { params }) {
       payload = await request.json();
     } catch (error) {}
 
-    const action = payload?.action;
+    const action = sanitizeString(payload?.action, 40);
     if (!action) {
       return NextResponse.json({ error: 'Missing action' }, { status: 400 });
     }
@@ -322,7 +433,7 @@ export async function POST(request, { params }) {
     const currentSkipCount = engagement?.skipCount || 0;
 
     if (action === 'open-gate') {
-      const reason = String(payload?.reason || '');
+      const reason = sanitizeString(payload?.reason, 40) || '';
       if (!ALLOWED_GATE_REASONS.has(reason)) {
         return NextResponse.json({ error: 'Unsupported gate reason' }, { status: 400 });
       }
@@ -361,8 +472,8 @@ export async function POST(request, { params }) {
     }
 
     if (action === 'complete-gate') {
-      const reason = String(payload?.reason || 'unknown');
-      const nonce = String(payload?.nonce || '');
+      const reason = sanitizeString(payload?.reason, 40) || 'unknown';
+      const nonce = sanitizeString(payload?.nonce, 128) || '';
       const pendingGate = engagement?.pendingGate || null;
       if (!pendingGate?.nonce) {
         return NextResponse.json({ error: 'No pending gate' }, { status: 400 });
@@ -407,35 +518,38 @@ export async function POST(request, { params }) {
   if (path === 'translate') {
     try {
       const { text, from, to } = await request.json();
+      const safeText = sanitizeString(text, MAX_TRANSLATION_TEXT_LENGTH);
+      const safeFrom = sanitizeString(from, MAX_LANGUAGE_CODE_LENGTH);
+      const safeTo = sanitizeString(to, MAX_LANGUAGE_CODE_LENGTH);
       
-      if (!text || !from || !to) {
+      if (!safeText || !safeFrom || !safeTo) {
         return NextResponse.json({ error: 'Missing fields: text, from, to required' }, { status: 400 });
       }
       
-      if (text.trim().length === 0) {
+      if (safeText.trim().length === 0) {
         return NextResponse.json({ translatedText: '' });
       }
 
-      const sourceLang = normalizeLangCode(from);
-      const targetLang = normalizeLangCode(to);
+      const sourceLang = normalizeLangCode(safeFrom);
+      const targetLang = normalizeLangCode(safeTo);
 
       if (!sourceLang || !targetLang) {
         return NextResponse.json({ error: 'Invalid language code(s)' }, { status: 400 });
       }
 
       if (sourceLang === targetLang) {
-        return NextResponse.json({ translatedText: text });
+        return NextResponse.json({ translatedText: safeText });
       }
 
       return NextResponse.json({
-        translatedText: text,
+        translatedText: safeText,
         provider: 'disabled-no-azure',
         fallback: true,
         sourceLang,
         targetLang,
       });
     } catch (error) {
-      console.error('Translation error:', error);
+      console.error('[Translate] Translation failed');
       return NextResponse.json({ error: 'Translation failed' }, { status: 500 });
     }
   }
@@ -443,12 +557,10 @@ export async function POST(request, { params }) {
   return NextResponse.json({ error: 'Not found' }, { status: 404 });
 }
 
-export async function OPTIONS() {
+export async function OPTIONS(request) {
   return NextResponse.json({}, {
     headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      ...buildCorsHeaders(request),
     },
   });
 }

@@ -12,6 +12,10 @@ loadEnvConfig(process.cwd());
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOST || '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000');
+const MAX_CHAT_MESSAGE_LENGTH = 1000;
+const MAX_REPORT_DETAILS_LENGTH = 500;
+const MAX_PROFILE_NAME_LENGTH = 60;
+const MAX_IMAGE_URL_LENGTH = 500;
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -35,6 +39,42 @@ function parseCookies(cookieHeader = '') {
     }, {});
 }
 
+function logInfo(...args) {
+  console.log(...args);
+}
+
+function logWarn(...args) {
+  console.warn(...args);
+}
+
+function logError(...args) {
+  console.error(...args);
+}
+
+function logDebug(...args) {
+  if (dev) console.log(...args);
+}
+
+function sanitizeString(value, maxLength) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeImageUrl(value) {
+  const trimmed = sanitizeString(value, MAX_IMAGE_URL_LENGTH);
+  if (typeof trimmed === 'undefined') return undefined;
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return null;
+    return parsed.toString();
+  } catch (error) {
+    return null;
+  }
+}
+
 function getAllowedOrigins() {
   const raw = process.env.CORS_ORIGINS || '';
   const parsed = raw.split(',').map((origin) => origin.trim()).filter(Boolean);
@@ -53,8 +93,8 @@ function assertProductionConfig() {
   const hasMongo = !!(process.env.MONGODB_URI || process.env.MONGO_URL || (process.env.MONGO_USERNAME && process.env.MONGO_PASSWORD && process.env.MONGO_HOST));
 
   if (!hasMongo) missing.push('MongoDB configuration');
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    missing.push('Upstash Redis REST configuration');
+  if (!process.env.REDIS_URL) {
+    missing.push('REDIS_URL');
   }
 
   if (missing.length) {
@@ -100,7 +140,8 @@ app.prepare().then(() => {
   }
 
   // In-memory state
-  const waitingQueue = []; // { socketId, primaryLanguage, spokenLanguages, mode, joinedAt }
+  // waitingQueue removed — queue is now fully Redis-authoritative
+  const matchingInProgress = new Set(); // socketIds currently being matched (process-local mutex)
   const rooms = new Map(); // roomId -> { user1, user2, mode, startedAt }
   const userSessions = new Map(); // socketId -> session data
   const userReputation = new Map(); // anonUserId -> { likesReceived, reportsReceived }
@@ -112,6 +153,214 @@ app.prepare().then(() => {
 
   // Simple presence count (connected sockets)
   let connectedCount = 0;
+  const PRESENCE_TTL_SECONDS = 180;
+  const INVITE_TTL_SECONDS = 30;
+  const QUEUE_TTL_SECONDS = 600;
+  const ROOM_TTL_SECONDS = 2 * 60 * 60;
+  const QUEUE_KEY = 'hippichat:queue:v2'; // kept for legacy compat, no longer the live queue
+  const QUEUE_MEMBERS_KEY = 'hippichat:queue-members:v3';
+
+  function getQueueEntryKey(socketId) {
+    return `hippichat:queue-entry:${socketId}`;
+  }
+
+  function getPresenceKey(identityId) {
+    return `hippichat:presence:${identityId}`;
+  }
+
+  function getInviteKey(inviteId) {
+    return `hippichat:invite:${inviteId}`;
+  }
+
+  function getInviteTimeoutKey(inviteId) {
+    return `hippichat:invite-timeout:${inviteId}`;
+  }
+
+  function getRoomKey(roomId) {
+    return `hippichat:room:${roomId}`;
+  }
+
+  async function setPresence(identityId, sockets) {
+    if (!identityId) return;
+    if (!sockets?.length) {
+      await redis.delKey(getPresenceKey(identityId)).catch(() => null);
+      return;
+    }
+    await redis.setJson(getPresenceKey(identityId), {
+      userId: identityId,
+      sockets,
+      online: true,
+      updatedAt: new Date().toISOString(),
+    }, PRESENCE_TTL_SECONDS).catch(() => null);
+  }
+
+  async function setPendingInvite(inviteId, invite) {
+    if (!inviteId || !invite) return;
+    await redis.setJson(getInviteKey(inviteId), {
+      inviteId,
+      inviterUserId: invite.inviterUserId,
+      inviterSocketId: invite.inviterSocketId,
+      inviteeUserId: invite.inviteeUserId,
+      inviteeSocketId: invite.inviteeSocketId,
+      mode: invite.mode,
+      createdAt: new Date().toISOString(),
+    }, INVITE_TTL_SECONDS).catch(() => null);
+  }
+
+  async function clearPendingInvite(inviteId) {
+    if (!inviteId) return;
+    await redis.delKey(getInviteKey(inviteId)).catch(() => null);
+  }
+
+  // ─── Redis-authoritative queue — optimised for minimum round-trips ──────────
+  //
+  // CALL COUNT (before → after):
+  //   removeFromRedisQueue : 3 sequential  → 2 parallel  (delKey + getJson together)
+  //   addToRedisQueue      : 3 sequential  → 2 rounds    (setJson || getJson, then setJson)
+  //   findAndClaimFromRQ   : 4+ sequential → 3 rounds    (getJson, parallel-getJson, parallel-delKey+setJson)
+  //   Total hot path       : 11 sequential → ~7 round-trips with parallelism
+  //
+  // matchingInProgress (in-memory Set) is the process-local mutex preventing
+  // two concurrent join-queue coroutines from double-claiming the same candidate.
+
+  async function addToRedisQueue(entry) {
+    try {
+      const entryData = {
+        socketId: entry.socketId,
+        identityId: getIdentityId(entry),
+        mode: entry.mode,
+        interests: entry.interests || [],
+        joinedAt: entry.joinedAt instanceof Date ? entry.joinedAt.toISOString() : (entry.joinedAt || new Date().toISOString()),
+      };
+
+      // Round 1: write own entry AND read the current member list in parallel
+      const [, members] = await Promise.all([
+        redis.setJson(getQueueEntryKey(entry.socketId), entryData, QUEUE_TTL_SECONDS),
+        redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
+      ]);
+
+      const currentMembers = Array.isArray(members) ? members : [];
+      if (!currentMembers.includes(entry.socketId)) {
+        currentMembers.push(entry.socketId);
+        // Round 2: write updated member list
+        await redis.setJson(QUEUE_MEMBERS_KEY, currentMembers, QUEUE_TTL_SECONDS);
+      }
+    } catch (err) {
+      logError('[Redis] Failed to add to queue:', err?.message || err);
+    }
+  }
+
+  async function removeFromRedisQueue(socketId) {
+    try {
+      // Round 1: delete own entry AND read member list in parallel
+      const [, members] = await Promise.all([
+        redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
+        redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
+      ]);
+
+      const currentMembers = Array.isArray(members) ? members : [];
+      const updated = currentMembers.filter((id) => id !== socketId);
+      if (updated.length !== currentMembers.length) {
+        // Round 2: write only if changed
+        await redis.setJson(QUEUE_MEMBERS_KEY, updated, QUEUE_TTL_SECONDS);
+      }
+    } catch (err) {
+      logError('[Redis] Failed to remove from queue:', err?.message || err);
+    }
+  }
+
+  async function getRedisQueueLength() {
+    try {
+      const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []);
+      return Array.isArray(members) ? members.length : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async function findAndClaimFromRedisQueue(socketId, mode, interests = []) {
+    const normalizedInterests = normalizeInterestKeywords(interests);
+
+    // Round 1: single read of the member list
+    const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []);
+    const currentMembers = Array.isArray(members) ? members : [];
+
+    const candidateIds = currentMembers.filter(
+      (id) => id !== socketId && !matchingInProgress.has(id)
+    );
+    if (!candidateIds.length) return null;
+
+    // Round 2: fetch all candidate entries IN PARALLEL (biggest saving)
+    const entries = await Promise.all(
+      candidateIds.map((id) => redis.getJson(getQueueEntryKey(id)).catch(() => null))
+    );
+
+    // Filter valid candidates matching the requested mode
+    const candidates = entries
+      .map((entry, i) => (entry && entry.mode === mode ? entry : null))
+      .filter(Boolean);
+
+    if (!candidates.length) return null;
+
+    // Sort: prefer interest overlap, then longest wait
+    candidates.sort((a, b) =>
+      new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
+    );
+    const withOverlap = candidates
+      .map((c) => ({ entry: c, overlap: getMatchedInterests(normalizedInterests, c.interests || []) }))
+      .filter((c) => c.overlap.length > 0)
+      .sort((a, b) => b.overlap.length - a.overlap.length);
+
+    const selected = withOverlap[0]?.entry || candidates[0];
+    if (!selected) return null;
+
+    // Process-local mutex: synchronous check before any await, so no two
+    // coroutines in the same Node.js event-loop tick can claim the same pair.
+    if (matchingInProgress.has(selected.socketId) || matchingInProgress.has(socketId)) {
+      return null;
+    }
+    matchingInProgress.add(selected.socketId);
+    matchingInProgress.add(socketId);
+
+    try {
+      // Round 3: delete both entries AND write the pruned member list IN PARALLEL
+      const updatedMembers = currentMembers.filter(
+        (id) => id !== selected.socketId && id !== socketId
+      );
+      await Promise.all([
+        redis.delKey(getQueueEntryKey(selected.socketId)).catch(() => null),
+        redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
+        redis.setJson(QUEUE_MEMBERS_KEY, updatedMembers, QUEUE_TTL_SECONDS),
+      ]);
+
+      return selected;
+    } finally {
+      matchingInProgress.delete(selected.socketId);
+      matchingInProgress.delete(socketId);
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
+  async function syncRoomSnapshot(roomId) {
+    const room = rooms.get(roomId);
+    if (!room) {
+      await redis.delKey(getRoomKey(roomId)).catch(() => null);
+      return;
+    }
+
+    const user1Session = userSessions.get(room.user1);
+    const user2Session = userSessions.get(room.user2);
+    await redis.setJson(getRoomKey(roomId), {
+      roomId,
+      user1SocketId: room.user1,
+      user2SocketId: room.user2,
+      user1Id: getIdentityId(user1Session),
+      user2Id: getIdentityId(user2Session),
+      mode: room.mode,
+      matchedInterests: room.matchedInterests || [],
+      startedAt: room.startedAt,
+    }, ROOM_TTL_SECONDS).catch(() => null);
+  }
 
   function queueBackground(task, label) {
     Promise.resolve(task).catch((error) => {
@@ -126,22 +375,49 @@ app.prepare().then(() => {
     return [...socketSet].filter((sid) => userSessions.has(sid));
   }
 
+  function isSocketInSameRoom(socketIdA, socketIdB) {
+    if (!socketIdA || !socketIdB) return false;
+    const sessionA = userSessions.get(socketIdA);
+    const sessionB = userSessions.get(socketIdB);
+    if (!sessionA?.roomId || !sessionB?.roomId || sessionA.roomId !== sessionB.roomId) return false;
+    const room = rooms.get(sessionA.roomId);
+    if (!room) return false;
+    return (room.user1 === socketIdA && room.user2 === socketIdB) || (room.user1 === socketIdB && room.user2 === socketIdA);
+  }
+
   function logRuntimeStats(label = 'runtime') {
     const memory = process.memoryUsage();
-    console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(memory.heapTotal / 1024 / 1024)}MB queue=${waitingQueue.length} rooms=${rooms.size} sessions=${userSessions.size} onlineUsers=${onlineUsers.size} profiles=${userProfiles.size} reputation=${userReputation.size} invites=${pendingFriendInvites.size}`);
+    console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(memory.heapTotal / 1024 / 1024)}MB rooms=${rooms.size} sessions=${userSessions.size} onlineUsers=${onlineUsers.size} profiles=${userProfiles.size} reputation=${userReputation.size} invites=${pendingFriendInvites.size}`);
   }
 
   function pruneRuntimeState() {
     const now = Date.now();
     const activeSocketIds = new Set(io.sockets.sockets.keys());
 
-    for (let i = waitingQueue.length - 1; i >= 0; i -= 1) {
-      const entry = waitingQueue[i];
-      const joinedAt = new Date(entry.joinedAt || now).getTime();
-      if (!activeSocketIds.has(entry.socketId) || now - joinedAt > 10 * 60 * 1000) {
-        waitingQueue.splice(i, 1);
+    // Prune stale Redis queue entries (sockets no longer connected)
+    // We do this async but fire-and-forget; failures are non-critical
+    queueBackground((async () => {
+      const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []) || [];
+      const validMembers = [];
+      for (const socketId of members) {
+        if (activeSocketIds.has(socketId)) {
+          // Check entry hasn't been stale too long
+          const entry = await redis.getJson(getQueueEntryKey(socketId)).catch(() => null);
+          if (entry) {
+            const joinedAt = new Date(entry.joinedAt || now).getTime();
+            if (now - joinedAt < 10 * 60 * 1000) {
+              validMembers.push(socketId);
+              continue;
+            }
+          }
+        }
+        // Remove stale entry
+        await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
       }
-    }
+      if (validMembers.length !== members.length) {
+        await redis.setJson(QUEUE_MEMBERS_KEY, validMembers, QUEUE_TTL_SECONDS);
+      }
+    })(), '[Runtime] Failed to prune Redis queue');
 
     for (const [roomId, room] of rooms.entries()) {
       const startedAt = new Date(room.startedAt || now).getTime();
@@ -288,17 +564,18 @@ app.prepare().then(() => {
     return;
   }
 
-  function broadcastStats() {
+  async function broadcastStats() {
+    const queueLength = await getRedisQueueLength().catch(() => 0);
     io.emit('stats', {
       online: connectedCount,
-      queueLength: waitingQueue.length,
+      queueLength,
       rooms: rooms.size,
     });
 
     queueBackground(
       redis.setJson('hippichat:stats', {
         online: connectedCount,
-        queueLength: waitingQueue.length,
+        queueLength,
         rooms: rooms.size,
         updatedAt: new Date().toISOString(),
       }, 180),
@@ -460,15 +737,7 @@ app.prepare().then(() => {
     }
     onlineUsers.get(anonUserId).add(socketId);
 
-    queueBackground(
-      redis.setJson(`hippichat:presence:${anonUserId}`, {
-        userId: anonUserId,
-        sockets: [...onlineUsers.get(anonUserId)],
-        online: true,
-        updatedAt: new Date().toISOString(),
-      }, 180),
-      '[Redis] Failed to sync presence add'
-    );
+    queueBackground(setPresence(anonUserId, [...onlineUsers.get(anonUserId)]), '[Redis] Failed to sync presence add');
   }
 
   function removeOnlineSocket(anonUserId, socketId) {
@@ -479,17 +748,7 @@ app.prepare().then(() => {
       onlineUsers.delete(anonUserId);
     }
 
-    queueBackground(
-      sockets.size === 0
-        ? redis.delKey(`hippichat:presence:${anonUserId}`)
-        : redis.setJson(`hippichat:presence:${anonUserId}`, {
-            userId: anonUserId,
-            sockets: [...sockets],
-            online: true,
-            updatedAt: new Date().toISOString(),
-          }, 180),
-      '[Redis] Failed to sync presence remove'
-    );
+    queueBackground(setPresence(anonUserId, [...sockets]), '[Redis] Failed to sync presence remove');
   }
 
   function isUserOnline(anonUserId) {
@@ -575,45 +834,6 @@ app.prepare().then(() => {
         await emitFriendsStatus(friend.friendUserId);
       }
     }
-  }
-
-  function syncQueueSnapshot() {
-    const snapshot = waitingQueue.map((entry) => ({
-      socketId: entry.socketId,
-      identityId: getIdentityId(entry),
-      mode: entry.mode,
-      interests: entry.interests || [],
-      joinedAt: entry.joinedAt,
-    }));
-
-    queueBackground(
-      redis.setJson('hippichat:queue', snapshot, 180),
-      '[Redis] Failed to sync queue snapshot'
-    );
-  }
-
-  function syncRoomSnapshot(roomId) {
-    const room = rooms.get(roomId);
-    if (!room) {
-      queueBackground(redis.delKey(`hippichat:room:${roomId}`), '[Redis] Failed to delete room snapshot');
-      return;
-    }
-
-    const user1Session = userSessions.get(room.user1);
-    const user2Session = userSessions.get(room.user2);
-    queueBackground(
-      redis.setJson(`hippichat:room:${roomId}`, {
-        roomId,
-        user1SocketId: room.user1,
-        user2SocketId: room.user2,
-        user1Id: getIdentityId(user1Session),
-        user2Id: getIdentityId(user2Session),
-        mode: room.mode,
-        matchedInterests: room.matchedInterests || [],
-        startedAt: room.startedAt,
-      }, 180),
-      '[Redis] Failed to sync room snapshot'
-    );
   }
 
   async function notifyFriendsOnlineStatusChanged(identityId) {
@@ -705,28 +925,11 @@ app.prepare().then(() => {
     return roomId;
   }
 
-  function findMatch(socketId, mode, interests = []) {
-    const normalizedInterests = normalizeInterestKeywords(interests);
-    const candidates = waitingQueue
-      .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.mode === mode && entry.socketId !== socketId)
-      .sort((a, b) => getQueueEntryWaitMs(b.entry) - getQueueEntryWaitMs(a.entry));
-
-    const bestInterestCandidate = candidates
-      .map((candidate) => ({
-        ...candidate,
-        overlap: getMatchedInterests(normalizedInterests, candidate.entry.interests || []),
-      }))
-      .filter((candidate) => candidate.overlap.length > 0)
-      .sort((a, b) => b.overlap.length - a.overlap.length || a.index - b.index)[0];
-
-    const selected = bestInterestCandidate || candidates[0];
-    if (!selected) return null;
-
-    return waitingQueue.splice(selected.index, 1)[0] || null;
+  async function findMatch(socketId, mode, interests = []) {
+    return findAndClaimFromRedisQueue(socketId, mode, interests);
   }
 
-  function leaveRoom(socket) {
+  async function leaveRoom(socket) {
     const session = userSessions.get(socket.id);
     if (!session || !session.roomId) return;
     const roomId = session.roomId;
@@ -738,15 +941,13 @@ app.prepare().then(() => {
       if (partnerSession) partnerSession.roomId = null;
       rooms.delete(roomId);
       roomActions.delete(roomId);
-      syncRoomSnapshot(roomId);
+      queueBackground(syncRoomSnapshot(roomId), '[Redis] Failed to sync room removal');
     }
     session.roomId = null;
   }
 
-  function removeFromQueue(socketId) {
-    const idx = waitingQueue.findIndex(u => u.socketId === socketId);
-    if (idx !== -1) waitingQueue.splice(idx, 1);
-    syncQueueSnapshot();
+  async function removeFromQueue(socketId) {
+    await removeFromRedisQueue(socketId);
   }
 
   io.use(async (socket, next) => {
@@ -763,15 +964,14 @@ app.prepare().then(() => {
   });
 
   io.on('connection', (socket) => {
-    console.log('[Socket] Connected:', socket.id);
+    logDebug('[Socket] Connected:', socket.id);
 
     connectedCount += 1;
-    socket.emit('stats', {
-      online: connectedCount,
-      queueLength: waitingQueue.length,
-      rooms: rooms.size,
-    });
-    broadcastStats();
+    queueBackground((async () => {
+      const queueLength = await getRedisQueueLength().catch(() => 0);
+      socket.emit('stats', { online: connectedCount, queueLength, rooms: rooms.size });
+    })(), '[Stats] Failed to emit initial stats');
+    queueBackground(broadcastStats(), '[Stats] Failed to broadcast on connect');
 
     socket.on('identify-user', async (data = {}) => {
       const existing = userSessions.get(socket.id) || { socketId: socket.id, spokenLanguages: [], roomId: null }
@@ -827,12 +1027,19 @@ app.prepare().then(() => {
     socket.on('join-queue', async (data) => {
       const { primaryLanguage, spokenLanguages, mode, anonUserId, country, interestKeywords } = data;
       const requestedMode = normalizeMode(mode);
-      console.log('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
+      logDebug('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
       const authUser = socket.data?.authUser || null
 
-      // Clean up any existing room
-      leaveRoom(socket);
-      removeFromQueue(socket.id);
+      // Clean up any existing room/queue membership AND check moderation in parallel
+      const [, , moderationBlock] = await Promise.all([
+        leaveRoom(socket),
+        removeFromQueue(socket.id),
+        getModerationBlock(getIdentityId({
+          userId: (socket.data?.authUser || null)?.id || null,
+          anonUserId: anonUserId || `guest_${socket.id}`,
+          socketId: socket.id,
+        })),
+      ]);
 
       const session = {
         socketId: socket.id,
@@ -854,7 +1061,7 @@ app.prepare().then(() => {
       session.country = resolveCountryPayload(session.country, userProfiles.get(identityId));
       userSessions.set(socket.id, session);
 
-      const moderationBlock = await getModerationBlock(identityId);
+      // moderationBlock was already fetched in parallel with leaveRoom/removeFromQueue above
       if (moderationBlock?.blockedUntil) {
         socket.emit('account-blocked', {
           ...moderationBlock,
@@ -882,84 +1089,99 @@ app.prepare().then(() => {
       queueBackground(emitHistory(identityId), '[Social] Failed to emit history');
       queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friends online status');
 
-      console.log('[Socket] Queue candidate ready:', {
-        socketId: socket.id,
-        identityId,
-        mode: session.mode,
-        interests: session.interests,
-        country: session.country,
-      });
+      logDebug('[Socket] Queue candidate ready:', { socketId: socket.id, mode: session.mode });
 
-      // Try to find a match
-      const match = findMatch(socket.id, session.mode, session.interests);
+      // ── KEY FIX: Add self to Redis queue BEFORE scanning for a match.
+      // This ensures both users are visible to each other during concurrent joins.
+      await addToRedisQueue(session);
+
+      // Try to find and atomically claim a waiting match
+      const match = await findMatch(socket.id, session.mode, session.interests);
+
       if (match) {
         const matchSession = userSessions.get(match.socketId);
         if (!matchSession) {
-          waitingQueue.push(session);
-          return;
-        }
-        if (normalizeMode(matchSession.mode) !== session.mode) {
-          waitingQueue.push(match);
-          waitingQueue.push(session);
-          syncQueueSnapshot();
+          // Match candidate disconnected after being claimed — stay in queue
+          // (our own entry was already removed by findAndClaimFromRedisQueue,
+          //  so re-add ourselves)
+          await addToRedisQueue(session);
+          const queueLength = await getRedisQueueLength().catch(() => 0);
           socket.emit('queue-status', {
-            position: waitingQueue.length,
-            queueLength: waitingQueue.length,
+            position: queueLength,
+            queueLength,
             interests: session.interests,
           });
+          queueBackground(broadcastStats(), '[Stats] Failed to broadcast after stale match');
+          return;
+        }
+
+        if (normalizeMode(matchSession.mode) !== session.mode) {
+          // Mode mismatch — put both back in queue
+          await addToRedisQueue(matchSession);
+          await addToRedisQueue(session);
+          const queueLength = await getRedisQueueLength().catch(() => 0);
+          socket.emit('queue-status', {
+            position: queueLength,
+            queueLength,
+            interests: session.interests,
+          });
+          queueBackground(broadcastStats(), '[Stats] Failed to broadcast after mode mismatch');
           return;
         }
 
         const roomId = await emitMatchedPair(match.socketId, matchSession, socket.id, session, {
           mode: session.mode,
         });
+
         if (!roomId) {
-          waitingQueue.push(match);
-          waitingQueue.push(session);
-          syncQueueSnapshot();
+          // emitMatchedPair rejected (e.g., mode guard) — put both back
+          await addToRedisQueue(matchSession);
+          await addToRedisQueue(session);
+          const queueLength = await getRedisQueueLength().catch(() => 0);
           socket.emit('queue-status', {
-            position: waitingQueue.length,
-            queueLength: waitingQueue.length,
+            position: queueLength,
+            queueLength,
             interests: session.interests,
           });
+          queueBackground(broadcastStats(), '[Stats] Failed to broadcast after failed match');
           return;
         }
 
-        console.log('[Socket] Matched:', match.socketId, '<->', socket.id, 'Room:', roomId);
-
-        broadcastStats();
+        logDebug('[Socket] Matched:', match.socketId, '<->', socket.id, 'Room:', roomId);
+        queueBackground(broadcastStats(), '[Stats] Failed to broadcast after match');
       } else {
-        waitingQueue.push(session);
-        syncQueueSnapshot();
+        // No match yet — stay in queue (already added above)
+        const queueLength = await getRedisQueueLength().catch(() => 0);
         socket.emit('queue-status', {
-          position: waitingQueue.length,
-          queueLength: waitingQueue.length,
+          position: queueLength,
+          queueLength,
           interests: session.interests,
         });
-        console.log('[Socket] Added to queue. Queue size:', waitingQueue.length);
+        logDebug('[Socket] Waiting in queue. Queue size:', queueLength);
         logRuntimeStats('queue-add');
-
-        broadcastStats();
+        queueBackground(broadcastStats(), '[Stats] Failed to broadcast after queue add');
       }
     });
 
-    socket.on('leave-queue', () => {
-      console.log('[Socket] leave-queue:', socket.id);
-      removeFromQueue(socket.id);
+    socket.on('leave-queue', async () => {
+      logDebug('[Socket] leave-queue:', socket.id);
+      await removeFromQueue(socket.id);
 
-      broadcastStats();
+      queueBackground(broadcastStats(), '[Stats] Failed to broadcast after leave-queue');
     });
 
     socket.on('signal', (data) => {
-      // Forward WebRTC signal to the target peer
-      if (data.to) {
-        io.to(data.to).emit('signal', {
-          type: data.type,
-          from: socket.id,
-          to: data.to,
-          payload: data.payload,
-        });
-      }
+      const targetSocketId = sanitizeString(data?.to, 128);
+      const signalType = sanitizeString(data?.type, 32);
+      if (!targetSocketId || !signalType) return;
+      if (!isSocketInSameRoom(socket.id, targetSocketId)) return;
+
+      io.to(targetSocketId).emit('signal', {
+        type: signalType,
+        from: socket.id,
+        to: targetSocketId,
+        payload: data?.payload,
+      });
     });
 
     socket.on('send-message', async (data) => {
@@ -970,25 +1192,20 @@ app.prepare().then(() => {
           return;
         }
       } catch (error) {
-        console.error('[Redis] Message rate-limit warning', error?.message || error);
+        logWarn('[Redis] Message rate-limit warning', error?.message || error);
       }
-      console.log('[Socket] send-message received:', socket.id, data);
       const session = userSessions.get(socket.id);
-      if (!session || !session.roomId) {
-        console.log('[Socket] send-message: no session or room for', socket.id);
-        return;
-      }
+      if (!session || !session.roomId) return;
       const room = rooms.get(session.roomId);
-      if (!room) {
-        console.log('[Socket] send-message: no room found for', session.roomId);
-        return;
-      }
+      if (!room) return;
+      const safeMessage = sanitizeString(data?.message, MAX_CHAT_MESSAGE_LENGTH);
+      const safeFromLang = sanitizeString(data?.fromLang, 32) || null;
+      if (!safeMessage) return;
       const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
-      console.log('[Socket] send-message: forwarding to partner', partnerId);
       io.to(partnerId).emit('receive-message', {
         id: generateId(),
-        text: data.message,
-        fromLang: data.fromLang,
+        text: safeMessage,
+        fromLang: safeFromLang,
         timestamp: new Date().toISOString(),
       });
     });
@@ -1000,8 +1217,12 @@ app.prepare().then(() => {
       if (!authUser) return;
 
       const identityId = getIdentityId(session);
-      const nextName = typeof data?.name === 'string' ? data.name.trim() : '';
-      const nextCustomImage = typeof data?.customImage === 'string' ? data.customImage.trim() : undefined;
+      const nextName = sanitizeString(data?.name, MAX_PROFILE_NAME_LENGTH) || '';
+      const nextCustomImage = sanitizeImageUrl(data?.customImage);
+      if (nextCustomImage === null) {
+        socket.emit('action-feedback', { type: 'profile', status: 'invalid-image-url' });
+        return;
+      }
       if (!identityId || (!nextName && typeof nextCustomImage === 'undefined')) return;
 
       if (nextName) {
@@ -1040,11 +1261,16 @@ app.prepare().then(() => {
       const room = rooms.get(session.roomId);
       if (!room) return;
       const partnerId = getRoomPartnerId(room, socket.id);
+      const safeText = sanitizeString(data?.text, MAX_CHAT_MESSAGE_LENGTH);
+      const safeOriginalText = sanitizeString(data?.originalText, MAX_CHAT_MESSAGE_LENGTH);
+      const safeFromLang = sanitizeString(data?.fromLang, 32) || null;
+      const safeToLang = sanitizeString(data?.toLang, 32) || null;
+      if (!safeText) return;
       io.to(partnerId).emit('translation-ready', {
-        text: data.text,
-        originalText: data.originalText,
-        fromLang: data.fromLang,
-        toLang: data.toLang,
+        text: safeText,
+        originalText: safeOriginalText,
+        fromLang: safeFromLang,
+        toLang: safeToLang,
       });
     });
 
@@ -1083,14 +1309,14 @@ app.prepare().then(() => {
     socket.on('report-partner', async (data) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
-      const explicitReportedId = data?.targetUserId || null;
+      const explicitReportedId = sanitizeString(data?.targetUserId, 128) || null;
       const effectiveRoomId = session.roomId || data?.roomId || null;
       const room = effectiveRoomId ? rooms.get(effectiveRoomId) : null;
 
       const actorAnon = getIdentityId(session);
       const actions = effectiveRoomId ? (roomActions.get(effectiveRoomId) || { likes: new Set(), reports: new Set() }) : { likes: new Set(), reports: new Set() };
-      const reason = data?.reason || 'other';
-      const details = typeof data?.details === 'string' ? data.details : '';
+      const reason = sanitizeString(data?.reason, 40) || 'other';
+      const details = sanitizeString(data?.details, MAX_REPORT_DETAILS_LENGTH) || '';
 
       if (effectiveRoomId && actions.reports.has(actorAnon)) {
         socket.emit('action-feedback', { type: 'report', status: 'duplicate' });
@@ -1130,16 +1356,10 @@ app.prepare().then(() => {
         });
       })(), '[Moderation] Failed to persist report or apply moderation threshold');
 
-      console.log('[Socket] report-partner:', {
-        reporter: socket.id,
-        partner: partnerId,
-        roomId: effectiveRoomId,
-        reason,
-        reportsReceived: partnerRep.reportsReceived,
-      });
+      logDebug('[Socket] report-partner:', { reporter: socket.id, roomId: effectiveRoomId, reason, reportsReceived: partnerRep.reportsReceived });
 
       if (room && session.roomId) {
-        leaveRoom(socket);
+        await leaveRoom(socket);
         socket.emit('partner-left');
       }
 
@@ -1153,7 +1373,7 @@ app.prepare().then(() => {
       if (!requireAuthenticatedUser(socket, 'friend-request')) return;
 
       const requesterId = getIdentityId(session);
-      let recipientId = data?.targetUserId || null;
+      let recipientId = sanitizeString(data?.targetUserId, 128) || null;
 
       if (!recipientId && session.roomId) {
         const room = rooms.get(session.roomId);
@@ -1228,7 +1448,7 @@ app.prepare().then(() => {
     });
 
     socket.on('connect-friend', async (data) => {
-      const friendAnonId = data?.friendAnonId;
+      const friendAnonId = sanitizeString(data?.friendAnonId, 128);
       const explicitRequestedMode = parseMode(data?.mode);
       if (typeof data?.mode !== 'undefined' && !explicitRequestedMode) {
         socket.emit('friend-connect-result', { ok: false, reason: 'invalid-mode' });
@@ -1266,6 +1486,7 @@ app.prepare().then(() => {
       const inviteId = generateId();
       const timeout = setTimeout(() => {
         pendingFriendInvites.delete(inviteId);
+        queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear expired pending invite');
         io.to(socket.id).emit('friend-connect-result', { ok: false, reason: 'expired' });
       }, 30_000);
 
@@ -1278,6 +1499,7 @@ app.prepare().then(() => {
         mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
         timeout,
       });
+      queueBackground(setPendingInvite(inviteId, pendingFriendInvites.get(inviteId)), '[Redis] Failed to persist pending invite');
 
       io.to(friendSocketId).emit('friend-connect-invite', {
         inviteId,
@@ -1291,13 +1513,14 @@ app.prepare().then(() => {
     socket.on('respond-friend-connect', async (data = {}) => {
       const session = userSessions.get(socket.id);
       if (!session) return;
-      const inviteId = data?.inviteId;
+      const inviteId = sanitizeString(data?.inviteId, 128);
       const accepted = !!data?.accepted;
       if (!inviteId || !pendingFriendInvites.has(inviteId)) return;
 
       const invite = pendingFriendInvites.get(inviteId);
       if (invite.timeout) clearTimeout(invite.timeout);
       pendingFriendInvites.delete(inviteId);
+      queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear pending invite');
 
       if (getIdentityId(session) !== invite.inviteeUserId) return;
 
@@ -1316,10 +1539,10 @@ app.prepare().then(() => {
       inviterSession.mode = inviteMode;
       inviteeSession.mode = inviteMode;
 
-      leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
-      removeFromQueue(invite.inviterSocketId);
-      leaveRoom(socket);
-      removeFromQueue(socket.id);
+      await leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
+      await removeFromQueue(invite.inviterSocketId);
+      await leaveRoom(socket);
+      await removeFromQueue(socket.id);
 
       const roomId = await emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
         mode: inviteMode,
@@ -1328,7 +1551,7 @@ app.prepare().then(() => {
 
       io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: true, roomId });
       socket.emit('friend-connect-result', { ok: true, roomId });
-      broadcastStats();
+      queueBackground(broadcastStats(), '[Stats] Failed to broadcast after friend connect');
     });
 
     socket.on('unfriend', async (data = {}) => {
@@ -1336,7 +1559,7 @@ app.prepare().then(() => {
       if (!session) return;
       if (!requireAuthenticatedUser(socket, 'unfriend')) return;
       const myUserId = getIdentityId(session);
-      const friendUserId = data?.friendUserId;
+      const friendUserId = sanitizeString(data?.friendUserId, 128);
       if (!friendUserId) return;
 
       const result = await socialStore.removeFriendship({ userId: myUserId, friendUserId });
@@ -1374,25 +1597,25 @@ app.prepare().then(() => {
       io.to(partnerId).emit('stop-typing');
     });
 
-    socket.on('next', (data = {}) => {
-      console.log('[Socket] next:', socket.id, data?.reason || 'unknown');
+    socket.on('next', async (data = {}) => {
+      logDebug('[Socket] next:', socket.id, data?.reason || 'unknown');
       const session = userSessions.get(socket.id);
       const room = session?.roomId ? rooms.get(session.roomId) : null;
       if (room && data?.reason === 'skip') {
         const partnerId = getRoomPartnerId(room, socket.id);
         io.to(partnerId).emit('partner-skipped');
       }
-      leaveRoom(socket);
-      removeFromQueue(socket.id);
+      await leaveRoom(socket);
+      await removeFromQueue(socket.id);
 
-      broadcastStats();
+      queueBackground(broadcastStats(), '[Stats] Failed to broadcast after next');
     });
 
-    socket.on('disconnect', (reason) => {
-      console.log('[Socket] Disconnected:', socket.id, reason);
+    socket.on('disconnect', async (reason) => {
+      logDebug('[Socket] Disconnected:', socket.id, reason);
       const session = userSessions.get(socket.id);
-      leaveRoom(socket);
-      removeFromQueue(socket.id);
+      await leaveRoom(socket);
+      await removeFromQueue(socket.id);
       if (session) {
         const identityId = getIdentityId(session);
         if (identityId) {
@@ -1404,7 +1627,7 @@ app.prepare().then(() => {
       userSessions.delete(socket.id);
 
       connectedCount = Math.max(0, connectedCount - 1);
-      broadcastStats();
+      queueBackground(broadcastStats(), '[Stats] Failed to broadcast after disconnect');
     });
   });
 
@@ -1413,7 +1636,7 @@ app.prepare().then(() => {
       pruneRuntimeState();
       logRuntimeStats('interval');
     } catch (error) {
-      console.error('[Runtime] Failed during prune/log cycle:', error?.message || error);
+      logError('[Runtime] Failed during prune/log cycle:', error?.message || error);
     }
   }, 60_000);
 
@@ -1421,7 +1644,7 @@ app.prepare().then(() => {
   const originalListeners = httpServer.listeners('request').slice();
 
   httpServer.listen(port, hostname, () => {
-    console.log(`> HippiChat ready on http://${hostname}:${port}`);
-    console.log(`> Socket.io server attached`);
+    logInfo(`> HippiChat ready on http://${hostname}:${port}`);
+    logInfo(`> Socket.io server attached`);
   });
 });

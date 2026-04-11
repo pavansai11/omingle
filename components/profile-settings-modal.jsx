@@ -24,6 +24,24 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
       return
     }
 
+    if (trimmed.length > 60) {
+      setError('Name must be 60 characters or less')
+      return
+    }
+
+    if (customImage.trim()) {
+      try {
+        const parsed = new URL(customImage.trim())
+        if (parsed.protocol !== 'https:') {
+          setError('Profile photo URL must use HTTPS')
+          return
+        }
+      } catch (error) {
+        setError('Profile photo URL must be a valid HTTPS URL')
+        return
+      }
+    }
+
     setSaving(true)
     setError(null)
     try {
@@ -32,7 +50,7 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: trimmed,
-          customImage,
+          customImage: customImage.trim(),
         }),
       })
       const data = await res.json()
