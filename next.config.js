@@ -1,53 +1,19 @@
 const isDev = process.env.NODE_ENV !== 'production';
-const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean)
 const primaryOrigin = allowedOrigins[0] || (isDev ? 'http://localhost:3000' : (process.env.NEXT_PUBLIC_BASE_URL || 'https://hippichat.com'))
 
-// ── Adsterra domains ──────────────────────────────────────────────────────────
-// theoreticalassertshame.com already present; add the Google ad-quality domain
-// that Adsense/Adsterra injects at runtime, plus the sodar subdomain.
-const adsterraDomain = 'https://theoreticalassertshame.com'
-const googleAdDomains = [
-  'https://pagead2.googlesyndication.com',
-  'https://ep2.adtrafficquality.google',       // sodar2.js parent — was blocked
-  'https://adtrafficquality.google',
-  'https://tpc.googlesyndication.com',
-  'https://googleads.g.doubleclick.net',
-]
+// ── CSP source lists ──────────────────────────────────────────────────────────
 
-// ── Monetag vignette ──────────────────────────────────────────────────────────
-// The working script URL is n6wxm.com (not ophoacit.com which was old/wrong).
-const moneTagDomains = [
-  'https://n6wxm.com',       // vignette loader — new correct URL
-  'https://ophoacit.com',    // kept for fallback / old cached references
-]
-
-// ── face-api model + CDN ──────────────────────────────────────────────────────
-// face-api.js is loaded dynamically from jsDelivr; its model weights are also
-// fetched from jsDelivr, so both the script and the fetch() must be allowed.
-const faceApiDomains = [
-  'https://cdn.jsdelivr.net',
-]
-
-// ── Cloudflare Analytics (beacon) ─────────────────────────────────────────────
-// Cloudflare injects its beacon script from static.cloudflareinsights.com.
-// Allow it to avoid noisy CSP errors, but it is non-critical.
-const cloudflareDomains = [
-  'https://static.cloudflareinsights.com',
-  'https://cloudflareinsights.com',
-]
-
-// ── Adsterra native/banner (profitablecpmratenetwork) ────────────────────────
-const profitDomain = 'https://pl29014129.profitablecpmratenetwork.com'
-
-// Assemble directives
 const connectSrc = [
   "'self'",
   'https://accounts.google.com',
   'https://oauth2.googleapis.com',
   'https://rtc.live.cloudflare.com',
   'https://ipapi.co',
-  'https://cdn.jsdelivr.net',        // face-api model weights (fetch)
-  'https://cloudflareinsights.com',  // beacon ping
+  'https://cdn.jsdelivr.net',          // face-api model weight fetches
+  'https://cloudflareinsights.com',    // CF beacon ping
+  'https://n6wxm.com',                 // Monetag vignette endpoint
+  'https://ophoacit.com',              // Monetag fallback
   'https:',
   'wss:',
 ].join(' ')
@@ -55,21 +21,31 @@ const connectSrc = [
 const scriptSrc = [
   "'self'",
   "'unsafe-inline'",
+  // Google / AdSense
   'https://accounts.google.com',
-  ...googleAdDomains,
-  adsterraDomain,
-  profitDomain,
-  ...moneTagDomains,
-  ...faceApiDomains,
-  ...cloudflareDomains,
+  'https://pagead2.googlesyndication.com',
+  'https://ep2.adtrafficquality.google',   // sodar2.js — injected by AdSense
+  'https://adtrafficquality.google',
+  // Adsterra
+  'https://theoreticalassertshame.com',
+  'https://pl29014129.profitablecpmratenetwork.com',
+  // Monetag vignette — new correct CDN
+  'https://n6wxm.com',
+  'https://ophoacit.com',              // kept for cached refs
+  // face-api.js from jsDelivr
+  'https://cdn.jsdelivr.net',
+  // Cloudflare Analytics beacon
+  'https://static.cloudflareinsights.com',
+  'https://cloudflareinsights.com',
 ].join(' ')
 
 const frameSrc = [
   "'self'",
   'https://accounts.google.com',
-  ...googleAdDomains,
-  adsterraDomain,
-  profitDomain,
+  'https://googleads.g.doubleclick.net',
+  'https://tpc.googlesyndication.com',
+  'https://theoreticalassertshame.com',
+  'https://pl29014129.profitablecpmratenetwork.com',
 ].join(' ')
 
 const imgSrc = ["'self'", 'data:', 'blob:', 'https:'].join(' ')
@@ -91,40 +67,31 @@ const csp = [
 const nextConfig = {
   output: 'standalone',
   distDir: isDev ? '.next-dev' : '.next',
-  images: {
-    unoptimized: true,
-  },
+  images: { unoptimized: true },
   experimental: {
     serverComponentsExternalPackages: ['mongodb'],
   },
   webpack(config, { dev }) {
     if (dev) {
-      config.watchOptions = {
-        poll: 2000,
-        aggregateTimeout: 300,
-        ignored: ['**/node_modules'],
-      };
+      config.watchOptions = { poll: 2000, aggregateTimeout: 300, ignored: ['**/node_modules'] }
     }
-    return config;
+    return config
   },
-  onDemandEntries: {
-    maxInactiveAge: 60 * 1000,
-    pagesBufferLength: 8,
-  },
+  onDemandEntries: { maxInactiveAge: 60 * 1000, pagesBufferLength: 8 },
   async headers() {
     return [
       {
-        source: "/(.*)",
+        source: '/(.*)',
         headers: [
-          { key: "X-Frame-Options", value: isDev ? "SAMEORIGIN" : "DENY" },
-          { key: "Content-Security-Policy", value: csp },
-          { key: "Access-Control-Allow-Origin", value: primaryOrigin },
-          { key: "Access-Control-Allow-Methods", value: "GET, POST, PUT, DELETE, OPTIONS" },
-          { key: "Access-Control-Allow-Headers", value: "*" },
+          { key: 'X-Frame-Options', value: isDev ? 'SAMEORIGIN' : 'DENY' },
+          { key: 'Content-Security-Policy', value: csp },
+          { key: 'Access-Control-Allow-Origin', value: primaryOrigin },
+          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers', value: '*' },
         ],
       },
-    ];
+    ]
   },
-};
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig

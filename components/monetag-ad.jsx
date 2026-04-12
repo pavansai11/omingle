@@ -2,49 +2,47 @@
 
 import { useEffect } from 'react'
 
-// Zone ID for the Monetag vignette ad unit
-const MONETAG_ZONE_ID = '10800687'
+const MONETAG_POPUNDER_ZONE = '10809114'
 
 /**
- * MonetagVignetteLoader
- * Loads the Monetag vignette script once on mount using the correct CDN URL.
- * The vignette is triggered imperatively via triggerMonetagVignette().
+ * MonetagPopunderLoader
+ * Loads the Monetag popunder tag once on mount.
+ * The popunder fires when the user explicitly clicks specific UI elements.
+ * We use a synthetic click on a hidden anchor to trigger it on demand.
  */
-export default function MonetagVignetteLoader() {
+export default function MonetagPopunderLoader() {
   useEffect(() => {
     if (typeof window === 'undefined') return
-
-    const scriptId = `monetag-vignette-${MONETAG_ZONE_ID}`
+    const scriptId = `monetag-popunder-${MONETAG_POPUNDER_ZONE}`
     if (document.getElementById(scriptId)) return
 
-    // ── Inline the vignette bootstrap exactly as Monetag documents it ────────
-    // This mimics: (function(s){s.dataset.zone='ZONE',s.src='https://n6wxm.com/vignette.min.js'})
-    //              ([document.documentElement, document.body].filter(Boolean).pop()
-    //               .appendChild(document.createElement('script')))
-    const container = [document.documentElement, document.body].filter(Boolean).pop()
-    const script = document.createElement('script')
-    script.id = scriptId
-    script.src = 'https://n6wxm.com/vignette.min.js'
-    script.async = true
-    script.dataset.zone = MONETAG_ZONE_ID
-    container.appendChild(script)
+    // Monetag popunder tag — exactly as provided
+    const s = document.createElement('script')
+    s.id = scriptId
+    s.dataset.zone = MONETAG_POPUNDER_ZONE
+    s.src = 'https://al5sm.com/tag.min.js'
+    ;([document.documentElement, document.body].filter(Boolean).pop()).appendChild(s)
   }, [])
 
   return null
 }
 
 /**
- * Imperatively trigger the Monetag vignette.
- * Call this from specific UX actions (skip threshold, friend request, filters).
- * Safe to call before the script loads — it will be a no-op.
+ * triggerMonetagPopunder
+ * Simulates a user click to trigger the Monetag popunder.
+ * Safe to call before script loads (no-op if not ready).
+ * Call only from explicit user-initiated actions.
  */
-export function triggerMonetagVignette() {
+export function triggerMonetagPopunder() {
   try {
-    const fnName = `show_${MONETAG_ZONE_ID}`
-    if (typeof window !== 'undefined' && typeof window[fnName] === 'function') {
-      window[fnName]()
-    }
-  } catch (e) {
-    // Silently fail — ad blocker or script not yet loaded
-  }
+    if (typeof window === 'undefined') return
+    // Monetag popunder fires on user click events.
+    // We dispatch a synthetic click from a trusted user-gesture context.
+    const a = document.createElement('a')
+    a.href = '#'
+    a.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:0;left:0;width:1px;height:1px;'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } catch (e) {}
 }

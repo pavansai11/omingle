@@ -31,7 +31,6 @@ export default function HomePage() {
     return data?.user || null
   }, [])
 
-  // Chat URL — mode only, no lang param
   const buildChatUrl = useCallback((mode = 'video') => `/chat?mode=${mode}`, [])
 
   useEffect(() => {
@@ -94,7 +93,7 @@ export default function HomePage() {
   function renderOnlineCount() {
     if (onlineCount !== null && onlineCount >= 100) {
       return (
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm mb-6">
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <Users className="w-3.5 h-3.5" />
           {onlineCount.toLocaleString()}+ people online now
@@ -102,7 +101,7 @@ export default function HomePage() {
       )
     }
     return (
-      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm mb-6">
+      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm">
         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
         People online and ready to chat
       </div>
@@ -127,18 +126,17 @@ export default function HomePage() {
     )
   }
 
-  const currentPhrase = HERO_PHRASES[phraseIndex]
-  const nextPhrase = HERO_PHRASES[(phraseIndex + 1) % HERO_PHRASES.length]
-
   if (step === 'landing') {
     return (
-      <div className="min-h-screen relative overflow-hidden flex flex-col bg-gray-950">
-        <div className="pointer-events-none absolute inset-0 bg-gray-950" />
+      // FIX 6: Full-screen layout so CTA is always above the fold
+      <div className="min-h-screen relative overflow-x-hidden flex flex-col bg-gray-950">
         <div className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-violet-600/8 rounded-full blur-3xl" />
-        <div className="relative z-10 flex-1 bg-transparent">
-          <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+
+        <div className="relative z-10 flex-1 flex flex-col">
+          {/* Nav */}
+          <nav className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 max-w-6xl mx-auto w-full">
             <button onClick={() => router.push('/')} className="flex items-center">
-              <img src="/logo.svg" alt="HippiChat" className="h-12 sm:h-14 md:h-16 w-auto" />
+              <img src="/logo.svg" alt="HippiChat" className="h-10 sm:h-12 w-auto" />
             </button>
             {sessionLoading ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-gray-800 bg-gray-900/80 px-3 py-2 text-xs text-gray-300">
@@ -149,73 +147,100 @@ export default function HomePage() {
             )}
           </nav>
 
-          <main className="flex flex-col items-center justify-center px-6 pt-16 pb-24 max-w-4xl mx-auto text-center">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-violet-600/10 border border-violet-500/20 text-violet-300 text-sm mb-8">
-              <Sparkles className="w-4 h-4" />
+          {/* FIX 6: Hero — compact enough that CTA stays above fold on all screens */}
+          <main className="flex flex-col items-center px-4 sm:px-6 pt-4 sm:pt-8 pb-4 max-w-4xl mx-auto w-full text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-600/10 border border-violet-500/20 text-violet-300 text-xs sm:text-sm mb-4">
+              <Sparkles className="w-3.5 h-3.5" />
               Random video and voice chat
             </div>
 
-            <h1 className="text-5xl sm:text-7xl font-bold leading-tight mb-6">
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-bold leading-tight mb-3 sm:mb-4">
               Meet someone new.<br />
               <span className="bg-gradient-to-r from-violet-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Start talking instantly.</span>
             </h1>
 
-            <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mb-8">
-              HippiChat makes random video and voice chat simple. Meet strangers worldwide, skip quickly, add friends, and reconnect later.
+            <p className="text-sm sm:text-base lg:text-lg text-gray-400 max-w-xl mb-3 sm:mb-4">
+              Random video and voice chat — meet strangers worldwide, skip fast, add friends, and reconnect later.
             </p>
 
             {renderOnlineCount()}
 
-            <div className="flex items-center gap-4 sm:gap-8 mb-10">
-              <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-2xl px-6 py-4">
-                <div className="text-2xl sm:text-3xl font-medium mb-1">{currentPhrase.text}</div>
-                <div className="text-xs text-gray-500">{currentPhrase.hint}</div>
+            {/* FIX 6: CTA - prominent "Meet a Stranger" button, always visible */}
+            <div className="mt-4 sm:mt-5 flex flex-col sm:flex-row items-center gap-3">
+              <button
+                onClick={() => { void handleStartChat('video') }}
+                disabled={sessionLoading}
+                className="group w-full sm:w-auto px-8 sm:px-10 py-3.5 sm:py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-lg sm:text-xl font-bold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center justify-center gap-3 disabled:opacity-60"
+              >
+                Meet a Stranger
+                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              </button>
+              <button
+                onClick={() => { void handleStartChat('voice') }}
+                disabled={sessionLoading}
+                className="group w-full sm:w-auto px-6 py-3.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl text-base font-semibold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                <Mic className="w-4 h-4 text-purple-400" />
+                Voice Chat
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mt-2">Google sign-in required · Video + voice · Friends & history</p>
+
+            {/* FIX 6: Phrase animation — compact horizontal below CTA */}
+            <div className="mt-4 sm:mt-5 flex items-center gap-2 sm:gap-4">
+              <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-xl px-3 sm:px-5 py-2 sm:py-3">
+                <div className="text-sm sm:text-lg font-medium">{HERO_PHRASES[phraseIndex].text}</div>
+                <div className="text-[10px] sm:text-xs text-gray-500">{HERO_PHRASES[phraseIndex].hint}</div>
               </div>
-              <ArrowRight className="w-5 h-5 text-violet-400" />
-              <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-2xl px-6 py-4">
-                <div className="text-2xl sm:text-3xl font-medium mb-1">{nextPhrase.text}</div>
-                <div className="text-xs text-gray-500">{nextPhrase.hint}</div>
+              <ArrowRight className="w-4 h-4 text-violet-400 shrink-0" />
+              <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-xl px-3 sm:px-5 py-2 sm:py-3">
+                <div className="text-sm sm:text-lg font-medium">{HERO_PHRASES[(phraseIndex + 1) % HERO_PHRASES.length].text}</div>
+                <div className="text-[10px] sm:text-xs text-gray-500">{HERO_PHRASES[(phraseIndex + 1) % HERO_PHRASES.length].hint}</div>
               </div>
             </div>
 
-            {/* Adsterra banner — desktop 728x90, mobile 320x50 */}
-            <div className="w-full max-w-2xl mb-6 flex justify-center overflow-hidden rounded-xl border border-gray-800/60 bg-gray-900/70 py-1">
+            {/* FIX 6: Ad placement — no empty box, just render ads directly.
+                Mobile: 320x50 banner (already loaded from AdsterraBanner).
+                Desktop: 728x90. No wrapper border if ad is empty. */}
+            <div className="mt-5 sm:mt-6 w-full flex justify-center">
               <AdsterraBanner />
             </div>
 
-            {/* Adsterra native banner — 1:1 responsive, homepage only */}
-            <div className="w-full max-w-2xl mb-8 rounded-2xl border border-gray-800/60 bg-gray-900/70 overflow-hidden">
-              <AdsterraNativeBanner />
-            </div>
-
-            <button
-              onClick={() => { void handleStartChat('video') }}
-              disabled={sessionLoading}
-              className="group px-10 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-xl font-bold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center gap-3"
-            >
-              Find a Stranger
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-            </button>
-
-            <p className="text-sm text-gray-500 mt-4">Google sign-in required · Video + voice chat · Friends and history built in</p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
+            {/* Feature cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5 sm:mt-6 w-full">
               {[
-                { icon: Video, title: 'Video + Voice', desc: 'Choose between face-to-face video chat or voice-only matching.' },
-                { icon: MessageSquare, title: 'Text Chat Included', desc: 'Keep the conversation going with built-in text chat during every match.' },
-                { icon: Sparkles, title: 'Friends + History', desc: 'Add people you liked and revisit recent interactions whenever needed.' },
+                { icon: Video, title: 'Video + Voice', desc: 'Choose between face-to-face video or voice-only matching.' },
+                { icon: MessageSquare, title: 'Text Chat Included', desc: 'Built-in text chat during every match.' },
+                { icon: Sparkles, title: 'Friends + History', desc: 'Add people you liked and revisit recent interactions.' },
               ].map((f, i) => (
-                <div key={i} className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl p-6 text-left">
-                  <div className="w-10 h-10 rounded-lg bg-violet-600/10 flex items-center justify-center mb-4">
-                    <f.icon className="w-5 h-5 text-violet-400" />
+                <div key={i} className="bg-gray-900/50 backdrop-blur border border-gray-800/50 rounded-2xl p-4 sm:p-5 text-left">
+                  <div className="w-9 h-9 rounded-lg bg-violet-600/10 flex items-center justify-center mb-3">
+                    <f.icon className="w-4 h-4 text-violet-400" />
                   </div>
-                  <h3 className="font-semibold text-white mb-2">{f.title}</h3>
-                  <p className="text-sm text-gray-400">{f.desc}</p>
+                  <h3 className="font-semibold text-white mb-1 text-sm">{f.title}</h3>
+                  <p className="text-xs text-gray-400">{f.desc}</p>
                 </div>
               ))}
             </div>
+
+            {/* Native banner ad below features — no box border */}
+            <div className="mt-5 w-full">
+              <AdsterraNativeBanner />
+            </div>
+
+            {/* Bottom CTA repeat for mobile users who scrolled past */}
+            <button
+              onClick={() => { void handleStartChat('video') }}
+              disabled={sessionLoading}
+              className="mt-6 sm:hidden group w-full px-8 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-lg font-bold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center justify-center gap-3 disabled:opacity-60"
+            >
+              Meet a Stranger
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+            </button>
           </main>
         </div>
+
         {renderAuthGate()}
         <SiteFooter />
       </div>
