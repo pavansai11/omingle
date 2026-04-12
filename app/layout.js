@@ -1,4 +1,5 @@
 import './globals.css'
+import MonetagVignetteLoader from '@/components/monetag-ad'
 
 export const metadata = {
   title: 'HippiChat — Random Video & Voice Chat',
@@ -31,6 +32,8 @@ export default function RootLayout({ children }) {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </head>
       <body className="bg-gray-950 text-white antialiased min-h-screen">
+        {/* Monetag vignette loader — fires only on specific actions */}
+        <MonetagVignetteLoader />
         {children}
       </body>
     </html>

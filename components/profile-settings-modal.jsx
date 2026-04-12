@@ -5,13 +5,11 @@ import { Loader2, X } from 'lucide-react'
 
 export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
   const [name, setName] = useState(user?.name || '')
-  const [customImage, setCustomImage] = useState(user?.customImage || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     setName(user?.name || '')
-    setCustomImage(user?.customImage || '')
     setError(null)
   }, [user])
 
@@ -23,23 +21,9 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
       setError('Name cannot be empty')
       return
     }
-
     if (trimmed.length > 60) {
       setError('Name must be 60 characters or less')
       return
-    }
-
-    if (customImage.trim()) {
-      try {
-        const parsed = new URL(customImage.trim())
-        if (parsed.protocol !== 'https:') {
-          setError('Profile photo URL must use HTTPS')
-          return
-        }
-      } catch (error) {
-        setError('Profile photo URL must be a valid HTTPS URL')
-        return
-      }
     }
 
     setSaving(true)
@@ -48,15 +32,10 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
       const res = await fetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: trimmed,
-          customImage: customImage.trim(),
-        }),
+        body: JSON.stringify({ name: trimmed }),
       })
       const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data?.error || 'Failed to save profile')
-      }
+      if (!res.ok) throw new Error(data?.error || 'Failed to save profile')
       onSaved?.(data.user)
       onClose?.()
     } catch (err) {
@@ -78,8 +57,8 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
 
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            {(customImage || user?.image) ? (
-              <img src={customImage || user.image} alt={user.name || 'User'} className="h-12 w-12 rounded-full object-cover" referrerPolicy="no-referrer" />
+            {user?.image ? (
+              <img src={user.image} alt={user.name || 'User'} className="h-12 w-12 rounded-full object-cover" referrerPolicy="no-referrer" />
             ) : (
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-600 text-white font-semibold text-lg">
                 {(user?.name || 'U').charAt(0).toUpperCase()}
@@ -99,23 +78,10 @@ export default function ProfileSettingsModal({ open, user, onClose, onSaved }) {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSave()}
               className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50"
               placeholder="Enter your name"
             />
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-medium text-gray-300">Profile photo URL</label>
-            <input
-              type="url"
-              value={customImage}
-              onChange={(e) => setCustomImage(e.target.value)}
-              className="w-full rounded-xl border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50"
-              placeholder="https://example.com/photo.jpg"
-            />
-            <p className="mt-2 text-xs text-gray-500">
-              Leave empty to continue using your Google photo.
-            </p>
           </div>
 
           {error && <p className="text-sm text-amber-300">{error}</p>}

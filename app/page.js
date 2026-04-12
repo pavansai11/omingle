@@ -5,26 +5,7 @@ import { useRouter } from 'next/navigation'
 import Script from 'next/script'
 import GoogleAuthButton from '@/components/google-auth-button'
 import SiteFooter from '@/components/site-footer'
-import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2 } from 'lucide-react'
-
-function AdsterraBanner({ scriptId, adKey, width, height, className = '' }) {
-  return (
-    <div className={`w-full overflow-hidden ${className}`.trim()}>
-      <Script
-        id={`${scriptId}-config`}
-        strategy="afterInteractive"
-        dangerouslySetInnerHTML={{
-          __html: `atOptions = { key: '${adKey}', format: 'iframe', height: ${height}, width: ${width}, params: {} };`,
-        }}
-      />
-      <Script
-        id={`${scriptId}-invoke`}
-        src={`https://theoreticalassertshame.com/${adKey}/invoke.js`}
-        strategy="afterInteractive"
-      />
-    </div>
-  )
-}
+import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2, Users } from 'lucide-react'
 
 const HERO_PHRASES = [
   { text: 'Meet strangers', hint: 'Live worldwide' },
@@ -42,6 +23,7 @@ export default function HomePage() {
   const [showAuthGate, setShowAuthGate] = useState(false)
   const [authIntentMode, setAuthIntentMode] = useState(null)
   const [phraseIndex, setPhraseIndex] = useState(0)
+  const [onlineCount, setOnlineCount] = useState(null)
 
   const loadSession = useCallback(async () => {
     const res = await fetch('/api/auth/session', { cache: 'no-store' })
@@ -65,29 +47,33 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false
-
     async function initSession() {
       try {
         const user = await loadSession()
-        if (!cancelled) {
-          setSessionUser(user)
-        }
+        if (!cancelled) setSessionUser(user)
       } catch (e) {
-        if (!cancelled) {
-          setSessionUser(null)
-        }
+        if (!cancelled) setSessionUser(null)
       } finally {
-        if (!cancelled) {
-          setSessionLoading(false)
-        }
+        if (!cancelled) setSessionLoading(false)
       }
     }
-
     initSession()
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [loadSession])
+
+  // Fetch live online count for homepage display
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const res = await fetch('/api/stats', { cache: 'no-store' })
+        if (res.ok) {
+          const data = await res.json()
+          if (typeof data?.online === 'number') setOnlineCount(data.online)
+        }
+      } catch (e) {}
+    }
+    fetchStats()
+  }, [])
 
   const allConsented = consent.age && consent.terms && consent.monitoring
 
@@ -105,7 +91,6 @@ export default function HomePage() {
         return
       }
     } catch (error) {}
-
     setAuthIntentMode(mode)
     setShowAuthGate(true)
   }, [loadSession, proceedToChat, sessionLoading])
@@ -119,19 +104,34 @@ export default function HomePage() {
     proceedToChat(mode, user)
   }, [authIntentMode, proceedToChat])
 
+  // Online count display logic: only show if >= 100, otherwise show friendly fallback
+  function renderOnlineCount() {
+    if (onlineCount !== null && onlineCount >= 100) {
+      return (
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm mb-6">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <Users className="w-3.5 h-3.5" />
+          {onlineCount.toLocaleString()}+ people online now
+        </div>
+      )
+    }
+    return (
+      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm mb-6">
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+        People online and ready to chat
+      </div>
+    )
+  }
+
   const renderAuthGate = () => {
     if (!showAuthGate) return null
-
     return (
       <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center px-4">
         <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">Sign in to continue</h3>
             <button
-              onClick={() => {
-                setShowAuthGate(false)
-                setAuthIntentMode(null)
-              }}
+              onClick={() => { setShowAuthGate(false); setAuthIntentMode(null) }}
               className="text-gray-400 hover:text-white"
             >
               <X className="w-4 h-4" />
@@ -190,54 +190,36 @@ export default function HomePage() {
               </span>
             </h1>
 
-            <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mb-12">
+            <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mb-8">
               HippiChat makes random video and voice chat simple.
               Meet strangers worldwide, skip quickly, add friends, and reconnect later.
             </p>
+
+            {renderOnlineCount()}
 
             <div className="flex items-center gap-4 sm:gap-8 mb-12">
               <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-2xl px-6 py-4">
                 <div className="text-2xl sm:text-3xl font-medium mb-1">{currentPhrase.text}</div>
                 <div className="text-xs text-gray-500">{currentPhrase.hint}</div>
               </div>
-
               <ArrowRight className="w-5 h-5 text-violet-400" />
-
               <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-2xl px-6 py-4">
                 <div className="text-2xl sm:text-3xl font-medium mb-1">{nextPhrase.text}</div>
                 <div className="text-xs text-gray-500">{nextPhrase.hint}</div>
               </div>
             </div>
 
-            <section className="mt-10 w-full max-w-xl text-left">
-              <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-                <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">
-                  Sponsored
-                </p>
-                <div className="mx-auto w-full max-w-[320px] overflow-hidden rounded-xl">
-                  <Script
-                    id="adsterra-native-bar"
-                    src="https://pl29014129.profitablecpmratenetwork.com/2d45ed9f6a976f07c6f4182a2e2b5428/invoke.js"
-                    strategy="afterInteractive"
-                    async
-                    data-cfasync="false"
-                  />
-                  <div id="container-2d45ed9f6a976f07c6f4182a2e2b5428" />
-                </div>
-              </div>
-            </section>
-
             <button
               onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
-              className="group px-8 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-lg font-semibold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center gap-3"
+              className="group px-10 py-4 bg-violet-600 hover:bg-violet-500 rounded-xl text-xl font-bold transition-all duration-200 active:scale-95 shadow-lg shadow-violet-600/25 flex items-center gap-3"
             >
-              Start Chatting
+              Find a Stranger
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
 
             <p className="text-sm text-gray-500 mt-4">
-              Google sign-in required • Video + voice chat • Friends and history built in
+              Google sign-in required · Video + voice chat · Friends and history built in
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
@@ -255,29 +237,6 @@ export default function HomePage() {
                 </div>
               ))}
             </div>
-
-            <section className="mt-12 w-full max-w-4xl overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60 p-4">
-              <p className="mb-3 text-[11px] uppercase tracking-[0.18em] text-gray-500">Sponsored</p>
-              <div className="hidden w-full justify-center overflow-hidden sm:flex">
-                <AdsterraBanner
-                  scriptId="homepage-bottom-banner-desktop"
-                  adKey="e3e6994248a1e5d1857a761f698ba4f5"
-                  width={728}
-                  height={90}
-                  className="flex w-full justify-center"
-                />
-              </div>
-              <div className="flex w-full justify-center overflow-hidden sm:hidden">
-                <AdsterraBanner
-                  scriptId="homepage-bottom-banner-mobile"
-                  adKey="136ca117e40190a371bbc86e466823b3"
-                  width={320}
-                  height={50}
-                  className="flex w-full justify-center"
-                />
-              </div>
-            </section>
-
           </main>
         </div>
         {renderAuthGate()}
@@ -303,35 +262,21 @@ export default function HomePage() {
           </p>
 
           <div className="space-y-4 mb-6">
-            <label className="flex items-start gap-3 cursor-pointer group">
-              <div className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${consent.age ? 'bg-violet-600 border-violet-600' : 'border-gray-600 group-hover:border-violet-400'}`}
-                onClick={() => setConsent(p => ({ ...p, age: !p.age }))}>
-                {consent.age && <Check className="w-3 h-3 text-white" />}
-              </div>
-              <span className="text-sm text-gray-300" onClick={() => setConsent(p => ({ ...p, age: !p.age }))}>
-                I confirm I am <strong>18 years or older</strong>
-              </span>
-            </label>
-
-            <label className="flex items-start gap-3 cursor-pointer group">
-              <div className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${consent.terms ? 'bg-violet-600 border-violet-600' : 'border-gray-600 group-hover:border-violet-400'}`}
-                onClick={() => setConsent(p => ({ ...p, terms: !p.terms }))}>
-                {consent.terms && <Check className="w-3 h-3 text-white" />}
-              </div>
-              <span className="text-sm text-gray-300" onClick={() => setConsent(p => ({ ...p, terms: !p.terms }))}>
-                I agree to the <strong>Terms of Service</strong> and <strong>Community Guidelines</strong>
-              </span>
-            </label>
-
-            <label className="flex items-start gap-3 cursor-pointer group">
-              <div className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${consent.monitoring ? 'bg-violet-600 border-violet-600' : 'border-gray-600 group-hover:border-violet-400'}`}
-                onClick={() => setConsent(p => ({ ...p, monitoring: !p.monitoring }))}>
-                {consent.monitoring && <Check className="w-3 h-3 text-white" />}
-              </div>
-              <span className="text-sm text-gray-300" onClick={() => setConsent(p => ({ ...p, monitoring: !p.monitoring }))}>
-                I understand conversations may be <strong>monitored for safety</strong>
-              </span>
-            </label>
+            {[
+              { key: 'age', label: <span>I confirm I am <strong>18 years or older</strong></span> },
+              { key: 'terms', label: <span>I agree to the <strong>Terms of Service</strong> and <strong>Community Guidelines</strong></span> },
+              { key: 'monitoring', label: <span>I understand conversations may be <strong>monitored for safety</strong></span> },
+            ].map(({ key, label }) => (
+              <label key={key} className="flex items-start gap-3 cursor-pointer group">
+                <div
+                  className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${consent[key] ? 'bg-violet-600 border-violet-600' : 'border-gray-600 group-hover:border-violet-400'}`}
+                  onClick={() => setConsent(p => ({ ...p, [key]: !p[key] }))}
+                >
+                  {consent[key] && <Check className="w-3 h-3 text-white" />}
+                </div>
+                <span className="text-sm text-gray-300" onClick={() => setConsent(p => ({ ...p, [key]: !p[key] }))}>{label}</span>
+              </label>
+            ))}
           </div>
 
           <div className="bg-gray-800/50 rounded-xl p-4 mb-6 text-xs text-gray-400">
@@ -349,11 +294,9 @@ export default function HomePage() {
           <button
             disabled={!allConsented}
             onClick={() => setStep('mode')}
-            className={`w-full py-3 rounded-xl font-semibold transition-all duration-200 ${allConsented
-              ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-[0.98]'
-              : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}
+            className={`w-full py-3 rounded-xl font-semibold transition-all duration-200 ${allConsented ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-[0.98]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}
           >
-            I Agree & Continue
+            I Agree &amp; Continue
           </button>
         </div>
         {renderAuthGate()}
@@ -368,17 +311,10 @@ export default function HomePage() {
           <button onClick={() => setStep('consent')} className="text-gray-400 hover:text-white text-sm mb-8 flex items-center gap-1">
             ← Back
           </button>
-
           <h2 className="text-2xl font-bold mb-2 text-center">How do you want to chat?</h2>
-          <p className="text-gray-400 mb-8 text-center">
-            Choose how you want to connect. Interests can be adjusted later from Filters.
-          </p>
-
+          <p className="text-gray-400 mb-8 text-center">Choose how you want to connect.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
-            <button
-              onClick={() => handleStartChat('video')}
-              className="group bg-gray-900/50 border border-gray-800 rounded-2xl p-8 text-left hover:border-violet-500/50 transition-all hover:bg-gray-900/80 active:scale-[0.98]"
-            >
+            <button onClick={() => handleStartChat('video')} className="group bg-gray-900/50 border border-gray-800 rounded-2xl p-8 text-left hover:border-violet-500/50 transition-all hover:bg-gray-900/80 active:scale-[0.98]">
               <div className="w-14 h-14 rounded-xl bg-violet-600/10 flex items-center justify-center mb-5 group-hover:bg-violet-600/20 transition-colors">
                 <Video className="w-7 h-7 text-violet-400" />
               </div>
@@ -388,11 +324,7 @@ export default function HomePage() {
                 <MessageSquare className="w-3.5 h-3.5" /> Text chat always available
               </div>
             </button>
-
-            <button
-              onClick={() => handleStartChat('voice')}
-              className="group bg-gray-900/50 border border-gray-800 rounded-2xl p-8 text-left hover:border-violet-500/50 transition-all hover:bg-gray-900/80 active:scale-[0.98]"
-            >
+            <button onClick={() => handleStartChat('voice')} className="group bg-gray-900/50 border border-gray-800 rounded-2xl p-8 text-left hover:border-violet-500/50 transition-all hover:bg-gray-900/80 active:scale-[0.98]">
               <div className="w-14 h-14 rounded-xl bg-purple-600/10 flex items-center justify-center mb-5 group-hover:bg-purple-600/20 transition-colors">
                 <Mic className="w-7 h-7 text-purple-400" />
               </div>
