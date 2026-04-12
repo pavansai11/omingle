@@ -22,21 +22,15 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" className="dark">
       <head>
-        <script dangerouslySetInnerHTML={{__html:'window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);'}} />
         <script
-          async
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9617793975321646"
-          crossOrigin="anonymous"
+          dangerouslySetInnerHTML={{
+            __html:
+              'window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);',
+          }}
         />
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </head>
       <body className="bg-gray-950 text-white antialiased min-h-screen">
-        {/*
-          Monetag is loaded ON DEMAND only — no global script here.
-          loadMonetagForNextClick() in chat-page.js injects tag.min.js
-          fresh each time a qualifying action fires (skip×10, filters, add friend).
-          Zone: 10809114 — https://al5sm.com/tag.min.js
-        */}
         {children}
       </body>
     </html>

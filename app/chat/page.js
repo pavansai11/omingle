@@ -13,7 +13,7 @@ import {
   AlertTriangle, ThumbsUp, Heart
 } from 'lucide-react'
 
-const FACE_CHECK_INTERVAL_MS = 5000
+const FACE_CHECK_INTERVAL_MS = 3000
 const FACE_CONSECUTIVE_MISSES_REQUIRED = 4
 const NO_FACE_TIMEOUT_MS = 10000
 const FACEAPI_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js'
@@ -21,6 +21,22 @@ const FACEAPI_MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12
 const FACE_DETECTOR_OPTIONS = { inputSize: 224, scoreThreshold: 0.55 }
 
 const SKIP_THRESHOLD_FOR_AD = 10
+const CHAT_AD_DELAY_MS = 8000
+const FACE_DETECTION_START_DELAY_MS = 4000
+const REMOTE_FRAME_TARGET_MS = 2000
+const STARTUP_VIDEO_CONSTRAINTS = {
+  width: { ideal: 320, max: 640 },
+  height: { ideal: 240, max: 480 },
+  frameRate: { ideal: 15, max: 20 },
+  facingMode: 'user',
+}
+const STEADY_VIDEO_CONSTRAINTS = {
+  width: { ideal: 640, max: 960 },
+  height: { ideal: 480, max: 540 },
+  frameRate: { ideal: 20, max: 24 },
+  facingMode: 'user',
+}
+
 const triggerMonetagVignette = () => loadMonetagForNextClick()
 
 function generateId() {
@@ -135,7 +151,7 @@ function ControlButtons({ primaryActionIsStop, isMediaReady, connectionState, on
   )
 }
 
-function FaceDetectionWarning({ visible, countdown, onDismiss }) {
+function FaceDetectionWarning({ visible }) {
   if (!visible) return null
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/75 backdrop-blur-sm rounded-xl">
@@ -143,8 +159,6 @@ function FaceDetectionWarning({ visible, countdown, onDismiss }) {
         <div className="text-3xl mb-3">📷</div>
         <p className="text-sm font-semibold text-amber-200 mb-1">Face not detected</p>
         <p className="text-xs text-gray-400 mb-4">Show your face to continue chatting.</p>
-        <div className="text-2xl font-bold text-amber-300 tabular-nums">{countdown}s</div>
-        <p className="text-[11px] text-gray-500 mt-1">Chat will end if face is not shown</p>
       </div>
     </div>
   )
@@ -217,9 +231,6 @@ function ChatDesktopAdBanner({ className = '' }) {
   )
 }
 
-// ─── VP8 codec preference ─────────────────────────────────────────────────────
-// Reorders the m=video codec list so VP8 is first.  VP8 has lower first-frame
-// decode latency than VP9/H264 on most hardware — especially important on mobile.
 function preferVP8(sdp) {
   return sdp.replace(/(m=video \d+ \S+)([\d ]+)/g, (match, prefix, codecs) => {
     const list = codecs.trim().split(' ')
@@ -227,6 +238,36 @@ function preferVP8(sdp) {
     if (!vp8) return match
     return `${prefix} ${[vp8, ...list.filter(c => c !== vp8)].join(' ')}`
   })
+}
+
+function getOptimizedRtcConfig(turnIceServers) {
+  const baseConfig = buildRtcConfig(turnIceServers)
+  return {
+    ...baseConfig,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+    iceCandidatePoolSize: 20,
+  }
+}
+
+function optimiseSenderForFastStart(sender) {
+  if (!sender?.track) return
+  if (sender.track.kind === 'video') {
+    try { sender.track.contentHint = 'motion' } catch (e) {}
+  }
+  try {
+    const params = sender.getParameters?.() || {}
+    params.degradationPreference = 'maintain-framerate'
+    params.encodings = params.encodings?.length ? params.encodings : [{}]
+    if (sender.track.kind === 'video') {
+      params.encodings[0].maxBitrate = 450000
+      params.encodings[0].maxFramerate = 20
+      params.encodings[0].priority = 'high'
+    } else if (sender.track.kind === 'audio') {
+      params.encodings[0].priority = 'high'
+    }
+    sender.setParameters?.(params).catch?.(() => {})
+  } catch (e) {}
 }
 
 function ChatPageContent() {
@@ -295,6 +336,8 @@ function ChatPageContent() {
   const [connectionNotice, setConnectionNotice] = useState('')
   const [mediaWarning, setMediaWarning] = useState(null)
   const [skipCount, setSkipCount] = useState(0)
+  const [hasRemoteFirstFrame, setHasRemoteFirstFrame] = useState(false)
+  const [shouldRenderChatAds, setShouldRenderChatAds] = useState(false)
 
   const [faceWarningVisible, setFaceWarningVisible] = useState(false)
   const [faceCountdown, setFaceCountdown] = useState(10)
@@ -332,9 +375,7 @@ function ChatPageContent() {
 
   const socketRef = useRef(null)
   const pcRef = useRef(null)
-  // ── CHANGE 1: pre-warmed peer connection ref ──────────────────────────────
   const preWarmedPcRef = useRef(null)
-  // ─────────────────────────────────────────────────────────────────────────
   const localStreamRef = useRef(null)
   const rawLocalStreamRef = useRef(null)
   const remoteStreamRef = useRef(null)
@@ -360,11 +401,53 @@ function ChatPageContent() {
   const matchedInterestsTimeoutRef = useRef(null)
   const matchedInterestsHideTimeoutRef = useRef(null)
   const recognitionRef = useRef(null)
+  const remoteFirstFrameFiredRef = useRef(false)
+  const matchStartedAtRef = useRef(0)
+  const remoteFrameTimerRef = useRef(null)
+  const faceStartTimerRef = useRef(null)
+  const adTimerRef = useRef(null)
+  const steadyVideoTimerRef = useRef(null)
 
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
   useEffect(() => { partnerLanguageRef.current = partnerLanguage }, [partnerLanguage])
   useEffect(() => { primaryLanguageRef.current = primaryLanguage }, [primaryLanguage])
   useEffect(() => { roomIdRef.current = roomId }, [roomId])
+
+  function clearPerformanceTimers() {
+    if (remoteFrameTimerRef.current) clearTimeout(remoteFrameTimerRef.current)
+    if (faceStartTimerRef.current) clearTimeout(faceStartTimerRef.current)
+    if (adTimerRef.current) clearTimeout(adTimerRef.current)
+    if (steadyVideoTimerRef.current) clearTimeout(steadyVideoTimerRef.current)
+    remoteFrameTimerRef.current = null
+    faceStartTimerRef.current = null
+    adTimerRef.current = null
+    steadyVideoTimerRef.current = null
+  }
+
+  function resetRemoteFirstFrameState() {
+    clearPerformanceTimers()
+    remoteFirstFrameFiredRef.current = false
+    matchStartedAtRef.current = 0
+    setHasRemoteFirstFrame(false)
+    setShouldRenderChatAds(false)
+  }
+
+  function scheduleChatAds() {
+    if (adTimerRef.current) clearTimeout(adTimerRef.current)
+    adTimerRef.current = setTimeout(() => setShouldRenderChatAds(true), CHAT_AD_DELAY_MS)
+  }
+
+  function markRemoteFirstFrame() {
+    if (remoteFirstFrameFiredRef.current) return
+    remoteFirstFrameFiredRef.current = true
+    setHasRemoteFirstFrame(true)
+    if (remoteFrameTimerRef.current) clearTimeout(remoteFrameTimerRef.current)
+    const elapsedMs = matchStartedAtRef.current ? Math.round(performance.now() - matchStartedAtRef.current) : null
+    if (elapsedMs !== null) {
+      console.info(`[RTC] First remote frame in ${elapsedMs}ms${elapsedMs <= REMOTE_FRAME_TARGET_MS ? ' (target hit)' : ''}`)
+    }
+    scheduleChatAds()
+  }
 
   async function loadFaceApi() {
     if (faceApiLoadedRef.current) return true
@@ -457,11 +540,37 @@ function ChatPageContent() {
   }
 
   useEffect(() => {
-    if (connectionState === 'connected' && mode === 'video') startFaceDetection()
-    else stopFaceDetection()
-    return stopFaceDetection
+    if (connectionState === 'connected' && mode === 'video' && hasRemoteFirstFrame) {
+      if (faceStartTimerRef.current) clearTimeout(faceStartTimerRef.current)
+      faceStartTimerRef.current = setTimeout(() => startFaceDetection(), FACE_DETECTION_START_DELAY_MS)
+    } else {
+      stopFaceDetection()
+    }
+    return () => {
+      if (faceStartTimerRef.current) clearTimeout(faceStartTimerRef.current)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState, mode])
+  }, [connectionState, mode, hasRemoteFirstFrame])
+
+  useEffect(() => {
+    const video = remoteVideoRef.current
+    if (!video) return
+    const onFirstFrame = () => markRemoteFirstFrame()
+    video.addEventListener('loadeddata', onFirstFrame)
+    video.addEventListener('playing', onFirstFrame)
+    video.addEventListener('canplay', onFirstFrame)
+    return () => {
+      video.removeEventListener('loadeddata', onFirstFrame)
+      video.removeEventListener('playing', onFirstFrame)
+      video.removeEventListener('canplay', onFirstFrame)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (mode === 'voice' && connectionState === 'connected') {
+      scheduleChatAds()
+    }
+  }, [mode, connectionState])
 
   function maybeShowAdOnSkip(nextSkipCount) {
     if (nextSkipCount > 0 && nextSkipCount % SKIP_THRESHOLD_FOR_AD === 0) triggerMonetagVignette()
@@ -711,12 +820,13 @@ function ChatPageContent() {
         const { io } = await import('socket.io-client')
         if (destroyed) return
         socket = io(window.location.origin, {
-          transports: ['polling', 'websocket'],
+          transports: ['websocket'],
+          upgrade: false,
           reconnection: true,
           reconnectionAttempts: 20,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 8000,
-          timeout: 20000,
+          timeout: 12000,
         })
         socketRef.current = socket
 
@@ -747,10 +857,12 @@ function ChatPageContent() {
           if (!data?.ok) {
             const msgs = { offline: 'Friend is offline', 'not-friends': 'You are not friends yet', declined: 'Friend declined the invite', expired: 'Friend invite expired' }
             showActionFeedback(msgs[data?.reason] || 'Unable to connect friend right now')
-            setPendingInviteRequestId(null); return
+            setPendingInviteRequestId(null)
+            return
           }
           if (data?.pending) { setPendingInviteRequestId(data.inviteId); showActionFeedback('Invite sent to your friend'); return }
-          setPendingInviteRequestId(null); showActionFeedback('Connecting to friend...')
+          setPendingInviteRequestId(null)
+          showActionFeedback('Connecting to friend...')
         })
         socket.on('friend-connect-invite', data => setFriendInviteRequest(data))
         socket.on('partner-likes-updated', data => { if (typeof data?.likes === 'number') setPartnerLikes(data.likes) })
@@ -784,15 +896,24 @@ function ChatPageContent() {
         })
         socket.on('account-blocked', data => {
           pendingStartRef.current = false
-          resetSessionUi(); setConnectionState('idle'); setAccountBlockedInfo(data || null)
+          resetSessionUi()
+          setConnectionState('idle')
+          setAccountBlockedInfo(data || null)
           showActionFeedback(data?.message || 'Account temporarily blocked from matching')
         })
         socket.on('force-logout', async () => {
           try { await fetch('/api/auth/logout', { method: 'POST' }) } catch {}
-          setSessionUser(null); router.replace('/')
+          setSessionUser(null)
+          router.replace('/')
         })
-        socket.on('connect_error', () => { setSocketConnected(false); if (pendingStartRef.current) showConnectionNotice('Reconnecting to chat...') })
-        socket.on('disconnect', reason => { setSocketConnected(false); if (pendingStartRef.current && reason !== 'io client disconnect') showConnectionNotice('Connection lost. Reconnecting...') })
+        socket.on('connect_error', () => {
+          setSocketConnected(false)
+          if (pendingStartRef.current) showConnectionNotice('Reconnecting to chat...')
+        })
+        socket.on('disconnect', reason => {
+          setSocketConnected(false)
+          if (pendingStartRef.current && reason !== 'io client disconnect') showConnectionNotice('Connection lost. Reconnecting...')
+        })
         socket.emit('get-friends-status')
       } catch (err) {
         setError('Failed to initialize connection')
@@ -883,11 +1004,14 @@ function ChatPageContent() {
         }
         const constraints = {
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000, sampleSize: 16 },
-          video: mode === 'video' ? { width: 640, height: 480, facingMode: 'user' } : false,
+          video: mode === 'video' ? STARTUP_VIDEO_CONSTRAINTS : false,
         }
         const stream = await getUserMedia(constraints)
         rawLocalStreamRef.current = stream
         localStreamRef.current = stream
+        stream.getVideoTracks().forEach(track => {
+          try { track.contentHint = 'motion' } catch (e) {}
+        })
         setHasCameraPermission(mode !== 'video' || stream.getVideoTracks().length > 0)
         if (localVideoRef.current && mode === 'video') await attachLocalPreviewStream(stream)
         setIsMediaReady(true)
@@ -920,6 +1044,19 @@ function ChatPageContent() {
   useEffect(() => { attachRemotePreviewStream() })
 
   useEffect(() => {
+    if (!hasRemoteFirstFrame || mode !== 'video' || !localStreamRef.current) return
+    const track = localStreamRef.current.getVideoTracks()[0]
+    if (!track) return
+    if (steadyVideoTimerRef.current) clearTimeout(steadyVideoTimerRef.current)
+    steadyVideoTimerRef.current = setTimeout(() => {
+      track.applyConstraints(STEADY_VIDEO_CONSTRAINTS).catch(() => {})
+    }, 3000)
+    return () => {
+      if (steadyVideoTimerRef.current) clearTimeout(steadyVideoTimerRef.current)
+    }
+  }, [hasRemoteFirstFrame, mode])
+
+  useEffect(() => {
     if (connectionState === 'connected') {
       setCallDuration(0)
       callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000)
@@ -934,42 +1071,29 @@ function ChatPageContent() {
     }
   }, [connectionState])
 
-  // ── CHANGE 2: pre-warm RTCPeerConnection ──────────────────────────────────
-  // Called every time we join the queue.  The browser starts ICE candidate
-  // gathering immediately with local tracks already attached, so by the time
-  // a match is found the candidates are ready and the offer can be sent
-  // in ~50 ms instead of waiting 600–1400 ms for STUN/TURN probing.
   function preWarmPeerConnection() {
-    // Discard any previous pre-warm PC that wasn't consumed
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
     }
     if (!localStreamRef.current) return
     try {
-      const baseConfig = buildRtcConfig(turnIceServers)
-      const pc = new RTCPeerConnection({
-        ...baseConfig,
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 10,   // pre-gather candidates while waiting
-      })
+      const pc = new RTCPeerConnection(getOptimizedRtcConfig(turnIceServers))
       localStreamRef.current.getTracks().forEach(t => {
-        try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
+        try {
+          const sender = pc.addTrack(t, localStreamRef.current)
+          optimiseSenderForFastStart(sender)
+        } catch (_) {}
       })
       preWarmedPcRef.current = pc
     } catch (_) {}
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
-  // ── CHANGE 3: modified joinQueue calls preWarmPeerConnection ─────────────
   function joinQueue() {
     if (!socketRef.current?.connected) return
     if (!sessionUser?.id) { router.replace('/'); return }
-
-    // Start ICE candidate gathering NOW, before a match is found
     if (isMediaReady) preWarmPeerConnection()
-
+    resetRemoteFirstFrameState()
     setConnectionState('waiting')
     setMessages([])
     setPartnerCaption(null)
@@ -987,7 +1111,6 @@ function ChatPageContent() {
       country: selfCountry,
     })
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handleMatched(data) {
     const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
@@ -998,6 +1121,11 @@ function ChatPageContent() {
       else setConnectionState('waiting')
       return
     }
+    resetRemoteFirstFrameState()
+    matchStartedAtRef.current = performance.now()
+    remoteFrameTimerRef.current = setTimeout(() => {
+      console.warn(`[RTC] Remote first frame exceeded ${REMOTE_FRAME_TARGET_MS}ms target`)
+    }, REMOTE_FRAME_TARGET_MS)
     setConnectionState('connecting')
     setMobilePane('video')
     setPartnerId(data.partnerId)
@@ -1035,7 +1163,6 @@ function ChatPageContent() {
     initPeerConnection(data.isInitiator, data.partnerId)
   }
 
-  // ── CHANGE 4: modified handleSignal applies VP8 preference on answer ──────
   async function handleSignal(data) {
     const pc = pcRef.current
     try {
@@ -1047,7 +1174,6 @@ function ChatPageContent() {
         const queuedForOffer = iceCandidateQueue.current.splice(0)
         await Promise.all(queuedForOffer.map(c => currentPc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
         const answer = await currentPc.createAnswer()
-        // Apply VP8 preference on the answerer side too
         const optimisedSdp = preferVP8(answer.sdp)
         await currentPc.setLocalDescription({ type: answer.type, sdp: optimisedSdp })
         socketRef.current?.emit('signal', { type: 'answer', to: data.from, payload: currentPc.localDescription })
@@ -1056,12 +1182,14 @@ function ChatPageContent() {
         const queuedForAnswer = iceCandidateQueue.current.splice(0)
         await Promise.all(queuedForAnswer.map(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
       } else if (data.type === 'ice-candidate' && data.payload) {
-        if (pc && pc.remoteDescription) { try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)) } catch (e) {} }
-        else iceCandidateQueue.current.push(data.payload)
+        if (pc && pc.remoteDescription) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)) } catch (e) {}
+        } else {
+          iceCandidateQueue.current.push(data.payload)
+        }
       }
     } catch (err) {}
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handlePartnerLeft() {
     const shouldKeepSearching = pendingStartRef.current
@@ -1069,7 +1197,8 @@ function ChatPageContent() {
     resetSessionUi()
     if (shouldKeepSearching && socketRef.current?.connected) {
       showActionFeedback('Searching for the next match...')
-      joinQueue(); return
+      joinQueue()
+      return
     }
     setConnectionState('idle')
     showActionFeedback('Partner left the chat')
@@ -1081,11 +1210,9 @@ function ChatPageContent() {
     if (!showChat) setUnreadCount(c => c + 1)
   }
 
-  // ── CHANGE 5: initPeerConnection reuses pre-warmed PC ─────────────────────
   function initPeerConnection(isInitiator, peerId) {
     cleanupPeerConnection()
 
-    // Reuse the pre-warmed PC if it is still usable (candidates already gathered)
     const prewarm = preWarmedPcRef.current
     let pc
     if (
@@ -1097,37 +1224,33 @@ function ChatPageContent() {
       pc = prewarm
       preWarmedPcRef.current = null
     } else {
-      // Pre-warm was not available (e.g. friend connect, or media not ready earlier)
       if (prewarm) {
         try { prewarm.close() } catch (_) {}
         preWarmedPcRef.current = null
       }
-      const baseConfig = buildRtcConfig(turnIceServers)
-      pc = new RTCPeerConnection({
-        ...baseConfig,
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 10,
-      })
+      pc = new RTCPeerConnection(getOptimizedRtcConfig(turnIceServers))
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(t => {
-          try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
+          try {
+            const sender = pc.addTrack(t, localStreamRef.current)
+            optimiseSenderForFastStart(sender)
+          } catch (_) {}
         })
       }
     }
 
+    pc.getSenders().forEach(optimiseSenderForFastStart)
     pcRef.current = pc
 
     const remoteStream = new MediaStream()
     remoteStreamRef.current = remoteStream
 
     pc.ontrack = event => {
-      // Collect tracks from the stream or directly from the event
       const tracks = event.streams?.[0]?.getTracks() || [event.track]
       tracks.forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
+        if (t.kind === 'video') t.onunmute = () => markRemoteFirstFrame()
       })
-      // Attach directly in the callback — don't wait for a React render cycle
       const vid = remoteVideoRef.current
       if (vid) {
         if (vid.srcObject !== remoteStream) vid.srcObject = remoteStream
@@ -1136,27 +1259,35 @@ function ChatPageContent() {
     }
 
     pc.onicecandidate = event => {
-      if (event.candidate)
+      if (event.candidate) {
         socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
+      }
     }
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') setConnectionState('connected')
-      else if (pc.connectionState === 'failed') {
+      if (pc.connectionState === 'connected') {
+        setConnectionState('connected')
+      } else if (pc.connectionState === 'failed') {
         cleanupPeerConnection()
         if (pendingStartRef.current && socketRef.current?.connected) {
-          resetSessionUi(); showActionFeedback('Finding next match...'); joinQueue()
+          resetSessionUi()
+          showActionFeedback('Finding next match...')
+          joinQueue()
         } else {
-          setConnectionState('idle'); showActionFeedback('Connection failed')
+          setConnectionState('idle')
+          showActionFeedback('Connection failed')
         }
       } else if (pc.connectionState === 'disconnected') {
         setTimeout(() => {
           if (pcRef.current?.connectionState === 'disconnected' || pcRef.current?.connectionState === 'failed') {
             cleanupPeerConnection()
             if (pendingStartRef.current && socketRef.current?.connected) {
-              resetSessionUi(); showActionFeedback('Reconnecting...'); joinQueue()
+              resetSessionUi()
+              showActionFeedback('Reconnecting...')
+              joinQueue()
             } else {
-              setConnectionState('idle'); showActionFeedback('Connection ended')
+              setConnectionState('idle')
+              showActionFeedback('Connection ended')
             }
           }
         }, 1500)
@@ -1164,8 +1295,9 @@ function ChatPageContent() {
     }
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         setConnectionState('connected')
+      }
     }
 
     if (isInitiator) {
@@ -1177,7 +1309,6 @@ function ChatPageContent() {
             offerToReceiveVideo: mode === 'video',
           })
           if (pc.signalingState !== 'stable') return
-          // Apply VP8 codec preference for faster first-frame decode
           const optimisedSdp = preferVP8(offer.sdp)
           await pc.setLocalDescription({ type: offer.type, sdp: optimisedSdp })
           socketRef.current?.emit('signal', { type: 'offer', to: peerId, payload: pc.localDescription })
@@ -1185,7 +1316,6 @@ function ChatPageContent() {
       })()
     }
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
@@ -1193,13 +1323,12 @@ function ChatPageContent() {
     remoteStreamRef.current = null
   }
 
-  // ── CHANGE 6: resetSessionUi cleans up pre-warmed PC ─────────────────────
   function resetSessionUi({ clearMessages = true } = {}) {
-    // Discard any unconsumed pre-warmed PC to avoid resource leaks
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
     }
+    resetRemoteFirstFrameState()
     cleanupPeerConnection()
     stopFaceDetection()
     setPartnerId(null); setPartnerLanguage(null); setPartnerCountry(null); setPartnerUserId(null); setPartnerProfile(null)
@@ -1211,7 +1340,6 @@ function ChatPageContent() {
     if (clearMessages) setMessages([])
     setReceivedLikeToast({ visible: false, message: '' })
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handleStartSearch() {
     if (!sessionUser?.id) { router.replace('/'); return }
@@ -1260,7 +1388,6 @@ function ChatPageContent() {
     pendingStartRef.current = false
     updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
     socketRef.current?.emit('next', { reason: 'end' })
-    // Clean up pre-warmed PC before navigating away
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
@@ -1401,7 +1528,6 @@ function ChatPageContent() {
       <AgeGateModal />
       <div className="flex flex-col overflow-hidden overscroll-none bg-gray-950" style={{ height: '100%' }}>
 
-        {/* Header */}
         <div className="relative z-30 shrink-0 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-2">
           <div className="flex items-center justify-between gap-3">
             <button onClick={() => router.push('/')} className="flex items-center">
@@ -1437,7 +1563,6 @@ function ChatPageContent() {
           }}
         />
 
-        {/* Preferences Modal */}
         {showPreferences && (
           <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-5 shadow-2xl">
@@ -1469,7 +1594,6 @@ function ChatPageContent() {
           </div>
         )}
 
-        {/* Report Modal */}
         {reportModalOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
@@ -1551,10 +1675,7 @@ function ChatPageContent() {
           </div>
         )}
 
-        {/* ── MAIN LAYOUT ── */}
         <div className="flex-1 flex relative overflow-hidden min-h-0">
-
-          {/* ── LEFT: Video/Voice + Controls ── */}
           <div className={`
             min-h-0 relative overflow-hidden flex flex-col
             ${showChat ? 'hidden sm:flex' : showMobileCenterPane ? 'hidden sm:flex' : 'flex'}
@@ -1562,10 +1683,8 @@ function ChatPageContent() {
           `}>
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                <ChatMobileAdBanner />
+                {shouldRenderChatAds && <ChatMobileAdBanner />}
                 <div className="flex-1 min-h-0 p-1.5 flex flex-col sm:grid sm:grid-cols-2 gap-1.5 overflow-hidden">
-
-                  {/* Stranger / Remote video */}
                   <div className="relative flex-1 sm:flex-none min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
                     <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
@@ -1595,7 +1714,6 @@ function ChatPageContent() {
                     )}
                   </div>
 
-                  {/* Self / Local video */}
                   <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden self-video-cell" style={{ height: '36%', minHeight: 120 }}>
                     <style dangerouslySetInnerHTML={{ __html: '@media(min-width:640px){.self-video-cell{height:auto!important;min-height:0!important}}' }} />
                     <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
@@ -1608,14 +1726,14 @@ function ChatPageContent() {
                     {!localStreamRef.current && (
                       <div className="absolute inset-0 bg-gray-900/90 hidden sm:flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
                     )}
-                    <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
+                    <FaceDetectionWarning visible={faceWarningVisible} />
                     <div className="absolute left-1.5 sm:left-2 bottom-1.5 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
                       You · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
                     </div>
                   </div>
                 </div>
 
-                <ChatDesktopAdBanner />
+                {shouldRenderChatAds && <ChatDesktopAdBanner />}
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
                   <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
@@ -1625,7 +1743,7 @@ function ChatPageContent() {
               </div>
             ) : (
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
-                <ChatMobileAdBanner />
+                {shouldRenderChatAds && <ChatMobileAdBanner />}
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
                   <div className="w-20 h-20 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center">
                     <Volume2 className="w-9 h-9 text-violet-400" />
@@ -1645,7 +1763,7 @@ function ChatPageContent() {
                     ))}
                   </div>
                 </div>
-                <ChatDesktopAdBanner />
+                {shouldRenderChatAds && <ChatDesktopAdBanner />}
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
                   <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
@@ -1687,7 +1805,6 @@ function ChatPageContent() {
             )}
           </div>
 
-          {/* ── CENTER: History / Friends panel ── */}
           <div className={`
             ${showChat ? 'hidden' : ''}
             ${showMobileCenterPane ? 'flex' : 'hidden'}
@@ -1851,7 +1968,6 @@ function ChatPageContent() {
             </div>
           </div>
 
-          {/* ── RIGHT: Text chat sidebar ── */}
           <div className={`${showChat ? 'flex w-full h-full flex-1 sm:w-80 lg:w-96' : 'hidden sm:flex sm:w-80 lg:w-96'} min-h-0 flex-col overflow-hidden border-l border-gray-800 bg-gray-900`}>
             <div className="shrink-0 border-b border-gray-800 bg-gray-900 px-4 py-3">
               <div className="flex items-center justify-between gap-2">
@@ -1909,7 +2025,6 @@ function ChatPageContent() {
           </div>
         </div>
 
-        {/* Mobile Control Bar */}
         <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
           <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
             onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}

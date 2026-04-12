@@ -35,7 +35,7 @@ function parseCookies(cookieHeader = '') {
       const key = part.slice(0, idx).trim();
       const value = decodeURIComponent(part.slice(idx + 1).trim());
       acc[key] = value;
-      return acc;
+    return acc;
     }, {});
 }
 
@@ -128,9 +128,12 @@ app.prepare().then(() => {
       },
       methods: ['GET', 'POST'],
     },
-    transports: ['websocket', 'polling'],
-    pingTimeout: 60000,
-    pingInterval: 25000,
+    transports: ['websocket'],
+    allowUpgrades: false,
+    httpCompression: false,
+    perMessageDeflate: false,
+    pingTimeout: 30000,
+    pingInterval: 15000,
   });
 
   const redisAdapter = redis.createSocketIoAdapter?.();
@@ -212,17 +215,6 @@ app.prepare().then(() => {
     await redis.delKey(getInviteKey(inviteId)).catch(() => null);
   }
 
-  // ─── Redis-authoritative queue — optimised for minimum round-trips ──────────
-  //
-  // CALL COUNT (before → after):
-  //   removeFromRedisQueue : 3 sequential  → 2 parallel  (delKey + getJson together)
-  //   addToRedisQueue      : 3 sequential  → 2 rounds    (setJson || getJson, then setJson)
-  //   findAndClaimFromRQ   : 4+ sequential → 3 rounds    (getJson, parallel-getJson, parallel-delKey+setJson)
-  //   Total hot path       : 11 sequential → ~7 round-trips with parallelism
-  //
-  // matchingInProgress (in-memory Set) is the process-local mutex preventing
-  // two concurrent join-queue coroutines from double-claiming the same candidate.
-
   async function addToRedisQueue(entry) {
     try {
       const entryData = {
@@ -233,7 +225,6 @@ app.prepare().then(() => {
         joinedAt: entry.joinedAt instanceof Date ? entry.joinedAt.toISOString() : (entry.joinedAt || new Date().toISOString()),
       };
 
-      // Round 1: write own entry AND read the current member list in parallel
       const [, members] = await Promise.all([
         redis.setJson(getQueueEntryKey(entry.socketId), entryData, QUEUE_TTL_SECONDS),
         redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
@@ -242,7 +233,6 @@ app.prepare().then(() => {
       const currentMembers = Array.isArray(members) ? members : [];
       if (!currentMembers.includes(entry.socketId)) {
         currentMembers.push(entry.socketId);
-        // Round 2: write updated member list
         await redis.setJson(QUEUE_MEMBERS_KEY, currentMembers, QUEUE_TTL_SECONDS);
       }
     } catch (err) {
@@ -252,7 +242,6 @@ app.prepare().then(() => {
 
   async function removeFromRedisQueue(socketId) {
     try {
-      // Round 1: delete own entry AND read member list in parallel
       const [, members] = await Promise.all([
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
         redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
@@ -261,7 +250,6 @@ app.prepare().then(() => {
       const currentMembers = Array.isArray(members) ? members : [];
       const updated = currentMembers.filter((id) => id !== socketId);
       if (updated.length !== currentMembers.length) {
-        // Round 2: write only if changed
         await redis.setJson(QUEUE_MEMBERS_KEY, updated, QUEUE_TTL_SECONDS);
       }
     } catch (err) {
@@ -280,8 +268,6 @@ app.prepare().then(() => {
 
   async function findAndClaimFromRedisQueue(socketId, mode, interests = []) {
     const normalizedInterests = normalizeInterestKeywords(interests);
-
-    // Round 1: single read of the member list
     const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []);
     const currentMembers = Array.isArray(members) ? members : [];
 
@@ -290,22 +276,20 @@ app.prepare().then(() => {
     );
     if (!candidateIds.length) return null;
 
-    // Round 2: fetch all candidate entries IN PARALLEL (biggest saving)
     const entries = await Promise.all(
       candidateIds.map((id) => redis.getJson(getQueueEntryKey(id)).catch(() => null))
     );
 
-    // Filter valid candidates matching the requested mode
     const candidates = entries
-      .map((entry, i) => (entry && entry.mode === mode ? entry : null))
+      .map((entry) => (entry && entry.mode === mode ? entry : null))
       .filter(Boolean);
 
     if (!candidates.length) return null;
 
-    // Sort: prefer interest overlap, then longest wait
     candidates.sort((a, b) =>
       new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
     );
+
     const withOverlap = candidates
       .map((c) => ({ entry: c, overlap: getMatchedInterests(normalizedInterests, c.interests || []) }))
       .filter((c) => c.overlap.length > 0)
@@ -314,19 +298,18 @@ app.prepare().then(() => {
     const selected = withOverlap[0]?.entry || candidates[0];
     if (!selected) return null;
 
-    // Process-local mutex: synchronous check before any await, so no two
-    // coroutines in the same Node.js event-loop tick can claim the same pair.
     if (matchingInProgress.has(selected.socketId) || matchingInProgress.has(socketId)) {
       return null;
     }
+
     matchingInProgress.add(selected.socketId);
     matchingInProgress.add(socketId);
 
     try {
-      // Round 3: delete both entries AND write the pruned member list IN PARALLEL
       const updatedMembers = currentMembers.filter(
         (id) => id !== selected.socketId && id !== socketId
       );
+
       await Promise.all([
         redis.delKey(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
@@ -339,7 +322,6 @@ app.prepare().then(() => {
       matchingInProgress.delete(socketId);
     }
   }
-  // ──────────────────────────────────────────────────────────────────────────
 
   async function syncRoomSnapshot(roomId) {
     const room = rooms.get(roomId);
@@ -394,14 +376,11 @@ app.prepare().then(() => {
     const now = Date.now();
     const activeSocketIds = new Set(io.sockets.sockets.keys());
 
-    // Prune stale Redis queue entries (sockets no longer connected)
-    // We do this async but fire-and-forget; failures are non-critical
     queueBackground((async () => {
       const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []) || [];
       const validMembers = [];
       for (const socketId of members) {
         if (activeSocketIds.has(socketId)) {
-          // Check entry hasn't been stale too long
           const entry = await redis.getJson(getQueueEntryKey(socketId)).catch(() => null);
           if (entry) {
             const joinedAt = new Date(entry.joinedAt || now).getTime();
@@ -411,7 +390,6 @@ app.prepare().then(() => {
             }
           }
         }
-        // Remove stale entry
         await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
       }
       if (validMembers.length !== members.length) {
@@ -555,8 +533,6 @@ app.prepare().then(() => {
   }
 
   async function enforceSingleActiveSocket(identityId, socketId) {
-    // Intentionally relaxed to allow the same authenticated account to use
-    // multiple devices/tabs independently for matching and chatting.
     return;
   }
 
@@ -921,7 +897,6 @@ app.prepare().then(() => {
     });
 
     syncRoomSnapshot(roomId);
-
     return roomId;
   }
 
@@ -1030,7 +1005,6 @@ app.prepare().then(() => {
       logDebug('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
       const authUser = socket.data?.authUser || null
 
-      // Clean up any existing room/queue membership AND check moderation in parallel
       const [, , moderationBlock] = await Promise.all([
         leaveRoom(socket),
         removeFromQueue(socket.id),
@@ -1061,7 +1035,6 @@ app.prepare().then(() => {
       session.country = resolveCountryPayload(session.country, userProfiles.get(identityId));
       userSessions.set(socket.id, session);
 
-      // moderationBlock was already fetched in parallel with leaveRoom/removeFromQueue above
       if (moderationBlock?.blockedUntil) {
         socket.emit('account-blocked', {
           ...moderationBlock,
@@ -1091,19 +1064,12 @@ app.prepare().then(() => {
 
       logDebug('[Socket] Queue candidate ready:', { socketId: socket.id, mode: session.mode });
 
-      // ── KEY FIX: Add self to Redis queue BEFORE scanning for a match.
-      // This ensures both users are visible to each other during concurrent joins.
       await addToRedisQueue(session);
-
-      // Try to find and atomically claim a waiting match
       const match = await findMatch(socket.id, session.mode, session.interests);
 
       if (match) {
         const matchSession = userSessions.get(match.socketId);
         if (!matchSession) {
-          // Match candidate disconnected after being claimed — stay in queue
-          // (our own entry was already removed by findAndClaimFromRedisQueue,
-          //  so re-add ourselves)
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
           socket.emit('queue-status', {
@@ -1116,7 +1082,6 @@ app.prepare().then(() => {
         }
 
         if (normalizeMode(matchSession.mode) !== session.mode) {
-          // Mode mismatch — put both back in queue
           await addToRedisQueue(matchSession);
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
@@ -1134,7 +1099,6 @@ app.prepare().then(() => {
         });
 
         if (!roomId) {
-          // emitMatchedPair rejected (e.g., mode guard) — put both back
           await addToRedisQueue(matchSession);
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
@@ -1150,7 +1114,6 @@ app.prepare().then(() => {
         logDebug('[Socket] Matched:', match.socketId, '<->', socket.id, 'Room:', roomId);
         queueBackground(broadcastStats(), '[Stats] Failed to broadcast after match');
       } else {
-        // No match yet — stay in queue (already added above)
         const queueLength = await getRedisQueueLength().catch(() => 0);
         socket.emit('queue-status', {
           position: queueLength,
@@ -1166,7 +1129,6 @@ app.prepare().then(() => {
     socket.on('leave-queue', async () => {
       logDebug('[Socket] leave-queue:', socket.id);
       await removeFromQueue(socket.id);
-
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after leave-queue');
     });
 
@@ -1298,10 +1260,7 @@ app.prepare().then(() => {
       const partnerAnon = getIdentityId(partnerSession);
       const partnerRep = await incrementReputation(partnerAnon, { likesReceived: 1 });
 
-      // Update liker's view of partner likes
       socket.emit('partner-likes-updated', { likes: partnerRep.likesReceived });
-
-      // Notify partner they received appreciation
       io.to(partnerId).emit('received-like', { totalLikes: partnerRep.likesReceived });
       socket.emit('action-feedback', { type: 'like', status: 'ok' });
     });
@@ -1483,6 +1442,7 @@ app.prepare().then(() => {
         socket.emit('friend-connect-result', { ok: false, reason: 'offline' });
         return;
       }
+
       const inviteId = generateId();
       const timeout = setTimeout(() => {
         pendingFriendInvites.delete(inviteId);
@@ -1499,6 +1459,7 @@ app.prepare().then(() => {
         mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
         timeout,
       });
+
       queueBackground(setPendingInvite(inviteId, pendingFriendInvites.get(inviteId)), '[Redis] Failed to persist pending invite');
 
       io.to(friendSocketId).emit('friend-connect-invite', {
@@ -1535,6 +1496,7 @@ app.prepare().then(() => {
         io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'offline' });
         return;
       }
+
       const inviteMode = normalizeMode(invite.mode);
       inviterSession.mode = inviteMode;
       inviteeSession.mode = inviteMode;
@@ -1607,7 +1569,6 @@ app.prepare().then(() => {
       }
       await leaveRoom(socket);
       await removeFromQueue(socket.id);
-
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after next');
     });
 
@@ -1640,11 +1601,8 @@ app.prepare().then(() => {
     }
   }, 60_000);
 
-  // Status endpoint
-  const originalListeners = httpServer.listeners('request').slice();
-
   httpServer.listen(port, hostname, () => {
     logInfo(`> HippiChat ready on http://${hostname}:${port}`);
-    logInfo(`> Socket.io server attached`);
+    logInfo('> Socket.io server attached');
   });
 });
