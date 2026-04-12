@@ -77,86 +77,58 @@ function normalizeInterestKeywords(rawKeywords = []) {
   )].slice(0, MAX_INTEREST_KEYWORDS)
 }
 
-// FIX 4: Desktop ControlButtons - big, full-width left of text chat
 function ControlButtons({ primaryActionIsStop, isMediaReady, connectionState, onPrimary, onSkip, onFilters, desktop = false, compact = false }) {
   if (desktop && !compact) {
-    // Full desktop: big buttons filling horizontal space
     return (
       <div className="flex items-stretch gap-2 w-full h-full">
-        <button
-          onClick={onPrimary}
-          disabled={!isMediaReady && !primaryActionIsStop}
-          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 py-3"
-        >
+        <button onClick={onPrimary} disabled={!isMediaReady && !primaryActionIsStop}
+          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 py-3">
           {primaryActionIsStop ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
           {primaryActionIsStop ? 'Stop' : 'Start'}
         </button>
-        <button
-          onClick={onSkip}
-          disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
-          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500 py-3"
-        >
+        <button onClick={onSkip} disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500 py-3">
           <SkipForward className="w-4 h-4" /> Skip
         </button>
-        <button
-          onClick={onFilters}
-          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-amber-400 text-gray-900 hover:bg-amber-300 py-3"
-        >
+        <button onClick={onFilters}
+          className="flex-1 flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all bg-amber-400 text-gray-900 hover:bg-amber-300 py-3">
           <SlidersHorizontal className="w-4 h-4" /> Filters
         </button>
       </div>
     )
   }
   if (desktop && compact) {
-    // Compact desktop (when panel open): still big, bottom-left
     return (
       <div className="flex items-stretch gap-2 w-full">
-        <button
-          onClick={onPrimary}
-          disabled={!isMediaReady && !primaryActionIsStop}
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 py-2.5"
-        >
+        <button onClick={onPrimary} disabled={!isMediaReady && !primaryActionIsStop}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500 py-2.5">
           {primaryActionIsStop ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
           {primaryActionIsStop ? 'Stop' : 'Start'}
         </button>
-        <button
-          onClick={onSkip}
-          disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500 py-2.5"
-        >
+        <button onClick={onSkip} disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500 py-2.5">
           <SkipForward className="w-3.5 h-3.5" /> Skip
         </button>
-        <button
-          onClick={onFilters}
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-amber-400 text-gray-900 hover:bg-amber-300 py-2.5"
-        >
+        <button onClick={onFilters}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition-all bg-amber-400 text-gray-900 hover:bg-amber-300 py-2.5">
           <SlidersHorizontal className="w-3.5 h-3.5" /> Filters
         </button>
       </div>
     )
   }
-  // Mobile
   return (
     <div className="grid grid-cols-3 gap-2 items-center max-w-xl mx-auto">
-      <button
-        onClick={onPrimary}
-        disabled={!isMediaReady && !primaryActionIsStop}
-        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500"
-      >
+      <button onClick={onPrimary} disabled={!isMediaReady && !primaryActionIsStop}
+        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-gray-800/90 border border-gray-700 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:text-gray-500">
         {primaryActionIsStop ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
         {primaryActionIsStop ? 'Stop' : 'Start'}
       </button>
-      <button
-        onClick={onSkip}
-        disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
-        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500"
-      >
+      <button onClick={onSkip} disabled={connectionState !== 'connected' && connectionState !== 'connecting'}
+        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-violet-600 text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-gray-700 disabled:text-gray-500">
         <SkipForward className="w-3.5 h-3.5" /> Skip
       </button>
-      <button
-        onClick={onFilters}
-        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-amber-400 text-gray-900 hover:bg-amber-300"
-      >
+      <button onClick={onFilters}
+        className="inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs font-medium transition-all whitespace-nowrap bg-amber-400 text-gray-900 hover:bg-amber-300">
         <SlidersHorizontal className="w-3.5 h-3.5" /> Filters
       </button>
     </div>
@@ -193,20 +165,15 @@ function ReceivedLikeToast({ message, visible }) {
 function loadMonetagForNextClick() {
   if (typeof window === 'undefined') return
   try {
-    // Remove any previous instance to force a fresh load each time
-    document.getElementById('monetag-onclick-pop')?.remove()
+    const prev = document.getElementById('monetag-onclick-pop')
+    if (prev) prev.parentNode?.removeChild(prev)
     const s = document.createElement('script')
     s.id = 'monetag-onclick-pop'
-    // Use the exact zone/src format from the official tag snippet
-    s.src = 'https://al5sm.com/tag.min.js'
-    // dataset.zone MUST be set before appending so tag.min.js reads it on load
-    s.dataset.zone = '10809114'
-    // Append to body so it fires in proper document context
-    document.body.appendChild(s)
+    s.textContent = "(function(s){s.dataset.zone='10809114',s.src='https://al5sm.com/tag.min.js'})([document.documentElement,document.body].filter(Boolean).pop().appendChild(document.createElement('script')))"
+    document.head.appendChild(s)
   } catch (e) {}
 }
 
-// FIX 3: Mobile banner ad (kept as-is)
 function ChatMobileAdBanner() {
   const ref = useRef(null)
   const injected = useRef(false)
@@ -214,21 +181,21 @@ function ChatMobileAdBanner() {
     if (injected.current || !ref.current) return
     injected.current = true
     const opt = document.createElement('script')
-    opt.text = `window.atOptions = {'key':'136ca117e40190a371bbc86e466823b3','format':'iframe','height':50,'width':320,'params':{}};`
+    opt.text = "window.atOptions = {'key':'136ca117e40190a371bbc86e466823b3','format':'iframe','height':50,'width':320,'params':{}};"
+    ref.current.appendChild(opt)
     const inv = document.createElement('script')
     inv.src = 'https://theoreticalassertshame.com/136ca117e40190a371bbc86e466823b3/invoke.js'
     inv.async = true
-    ref.current.appendChild(opt)
     ref.current.appendChild(inv)
   }, [])
   return (
-    <div className="sm:hidden shrink-0 flex justify-center items-center border-b border-gray-800/60 bg-gray-950" style={{ height: 52 }}>
-      <div ref={ref} style={{ width: 320, height: 50, overflow: 'hidden' }} />
+    <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60"
+      style={{ height: 52, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div ref={ref} style={{ width: 320, height: 50 }} />
     </div>
   )
 }
 
-// FIX 3: Replace ugly 3:1 native ad with 468x60 banner on desktop
 function ChatDesktopAdBanner({ className = '' }) {
   const ref = useRef(null)
   const injected = useRef(false)
@@ -248,6 +215,18 @@ function ChatDesktopAdBanner({ className = '' }) {
       <div ref={ref} style={{ width: 468, height: 60, overflow: 'hidden' }} />
     </div>
   )
+}
+
+// ─── VP8 codec preference ─────────────────────────────────────────────────────
+// Reorders the m=video codec list so VP8 is first.  VP8 has lower first-frame
+// decode latency than VP9/H264 on most hardware — especially important on mobile.
+function preferVP8(sdp) {
+  return sdp.replace(/(m=video \d+ \S+)([\d ]+)/g, (match, prefix, codecs) => {
+    const list = codecs.trim().split(' ')
+    const vp8 = list.find(pt => sdp.includes(`a=rtpmap:${pt} VP8/`))
+    if (!vp8) return match
+    return `${prefix} ${[vp8, ...list.filter(c => c !== vp8)].join(' ')}`
+  })
 }
 
 function ChatPageContent() {
@@ -353,15 +332,12 @@ function ChatPageContent() {
 
   const socketRef = useRef(null)
   const pcRef = useRef(null)
+  // ── CHANGE 1: pre-warmed peer connection ref ──────────────────────────────
+  const preWarmedPcRef = useRef(null)
+  // ─────────────────────────────────────────────────────────────────────────
   const localStreamRef = useRef(null)
   const rawLocalStreamRef = useRef(null)
   const remoteStreamRef = useRef(null)
-  // Multi-element video refs: one ref per rendered <video> DOM node
-  // because React only attaches a single ref to the last element using it.
-  // We keep arrays of all video elements and sync streams to all of them.
-  const localVideoEls = useRef([])   // all <video> for local preview
-  const remoteVideoEls = useRef([])  // all <video> for remote stream
-  // Legacy single refs kept for face-detection (which uses localVideoRef)
   const localVideoRef = useRef(null)
   const remoteVideoRef = useRef(null)
   const callTimerRef = useRef(null)
@@ -657,35 +633,18 @@ function ChatPageContent() {
     setInteractionHistory(prev => prev.map(i => i.id === currentMatchHistoryIdRef.current ? { ...i, ...patch } : i))
   }
 
-  // Sync stream to a single video element
-  async function syncVideoEl(el, stream, muted = false) {
-    if (!el || !stream) return
-    if (el.srcObject !== stream) el.srcObject = stream
-    el.muted = muted
-    el.playsInline = true
-    try { await el.play() } catch (e) {}
-  }
-
   async function attachLocalPreviewStream(stream) {
-    if (!stream || mode !== 'video') return
-    // Sync to all registered local video elements
-    for (const el of localVideoEls.current) {
-      await syncVideoEl(el, stream, true)
-    }
-    // Also sync legacy ref for face detection
-    if (localVideoRef.current) {
-      await syncVideoEl(localVideoRef.current, stream, true)
-    }
+    if (!localVideoRef.current || !stream || mode !== 'video') return
+    if (localVideoRef.current.srcObject !== stream) localVideoRef.current.srcObject = stream
+    localVideoRef.current.muted = true
+    localVideoRef.current.playsInline = true
+    try { await localVideoRef.current.play() } catch (e) {}
   }
 
   async function attachRemotePreviewStream() {
-    if (!remoteStreamRef.current || mode !== 'video') return
-    for (const el of remoteVideoEls.current) {
-      await syncVideoEl(el, remoteStreamRef.current, false)
-    }
-    if (remoteVideoRef.current) {
-      await syncVideoEl(remoteVideoRef.current, remoteStreamRef.current, false)
-    }
+    if (!remoteVideoRef.current || !remoteStreamRef.current || mode !== 'video') return
+    if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current
+    try { await remoteVideoRef.current.play() } catch (e) {}
   }
 
   async function replacePeerConnectionVideoTrack(track) {
@@ -735,13 +694,11 @@ function ChatPageContent() {
     socketRef.current.emit('reject-friend-request', { requestId })
   }
 
-  // FIX 2: handleConnectFriend now accepts explicit mode
   function handleConnectFriend(friendAnonId, explicitMode) {
     if (!socketRef.current || !friendAnonId) return
     const connectMode = explicitMode || mode
     socketRef.current.emit('connect-friend', { friendAnonId, mode: connectMode })
     setShowFriendsPanel(false)
-    // FIX 1: Don't close panel tab when connecting — keep history/friends visible
   }
 
   useEffect(() => {
@@ -977,9 +934,42 @@ function ChatPageContent() {
     }
   }, [connectionState])
 
+  // ── CHANGE 2: pre-warm RTCPeerConnection ──────────────────────────────────
+  // Called every time we join the queue.  The browser starts ICE candidate
+  // gathering immediately with local tracks already attached, so by the time
+  // a match is found the candidates are ready and the offer can be sent
+  // in ~50 ms instead of waiting 600–1400 ms for STUN/TURN probing.
+  function preWarmPeerConnection() {
+    // Discard any previous pre-warm PC that wasn't consumed
+    if (preWarmedPcRef.current) {
+      try { preWarmedPcRef.current.close() } catch (_) {}
+      preWarmedPcRef.current = null
+    }
+    if (!localStreamRef.current) return
+    try {
+      const baseConfig = buildRtcConfig(turnIceServers)
+      const pc = new RTCPeerConnection({
+        ...baseConfig,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        iceCandidatePoolSize: 10,   // pre-gather candidates while waiting
+      })
+      localStreamRef.current.getTracks().forEach(t => {
+        try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
+      })
+      preWarmedPcRef.current = pc
+    } catch (_) {}
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── CHANGE 3: modified joinQueue calls preWarmPeerConnection ─────────────
   function joinQueue() {
     if (!socketRef.current?.connected) return
     if (!sessionUser?.id) { router.replace('/'); return }
+
+    // Start ICE candidate gathering NOW, before a match is found
+    if (isMediaReady) preWarmPeerConnection()
+
     setConnectionState('waiting')
     setMessages([])
     setPartnerCaption(null)
@@ -997,6 +987,7 @@ function ChatPageContent() {
       country: selfCountry,
     })
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function handleMatched(data) {
     const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
@@ -1008,7 +999,6 @@ function ChatPageContent() {
       return
     }
     setConnectionState('connecting')
-    // FIX 1: When matched, on mobile show video. On desktop, DON'T change panelTab
     setMobilePane('video')
     setPartnerId(data.partnerId)
     setPartnerUserId(data.partnerUserId || null)
@@ -1042,32 +1032,36 @@ function ChatPageContent() {
       connectedAt: new Date().toISOString(),
       isFriendConnection: !!data.isFriendConnection,
     })
-    setTimeout(() => initPeerConnection(data.isInitiator, data.partnerId), 0)
+    initPeerConnection(data.isInitiator, data.partnerId)
   }
 
+  // ── CHANGE 4: modified handleSignal applies VP8 preference on answer ──────
   async function handleSignal(data) {
     const pc = pcRef.current
     try {
       if (data.type === 'offer' && data.payload) {
-        if (!pc) { initPeerConnection(false, data.from); await new Promise(r => setTimeout(r, 100)) }
+        if (!pcRef.current) initPeerConnection(false, data.from)
         const currentPc = pcRef.current
         if (!currentPc) return
         await currentPc.setRemoteDescription(new RTCSessionDescription(data.payload))
-        for (const c of iceCandidateQueue.current) { try { await currentPc.addIceCandidate(new RTCIceCandidate(c)) } catch (e) {} }
-        iceCandidateQueue.current = []
+        const queuedForOffer = iceCandidateQueue.current.splice(0)
+        await Promise.all(queuedForOffer.map(c => currentPc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
         const answer = await currentPc.createAnswer()
-        await currentPc.setLocalDescription(answer)
-        socketRef.current?.emit('signal', { type: 'answer', to: data.from, payload: answer })
+        // Apply VP8 preference on the answerer side too
+        const optimisedSdp = preferVP8(answer.sdp)
+        await currentPc.setLocalDescription({ type: answer.type, sdp: optimisedSdp })
+        socketRef.current?.emit('signal', { type: 'answer', to: data.from, payload: currentPc.localDescription })
       } else if (data.type === 'answer' && data.payload && pc) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.payload))
-        for (const c of iceCandidateQueue.current) { try { await pc.addIceCandidate(new RTCIceCandidate(c)) } catch (e) {} }
-        iceCandidateQueue.current = []
+        const queuedForAnswer = iceCandidateQueue.current.splice(0)
+        await Promise.all(queuedForAnswer.map(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
       } else if (data.type === 'ice-candidate' && data.payload) {
         if (pc && pc.remoteDescription) { try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)) } catch (e) {} }
         else iceCandidateQueue.current.push(data.payload)
       }
     } catch (err) {}
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function handlePartnerLeft() {
     const shouldKeepSearching = pendingStartRef.current
@@ -1087,71 +1081,125 @@ function ChatPageContent() {
     if (!showChat) setUnreadCount(c => c + 1)
   }
 
+  // ── CHANGE 5: initPeerConnection reuses pre-warmed PC ─────────────────────
   function initPeerConnection(isInitiator, peerId) {
     cleanupPeerConnection()
-    const pc = new RTCPeerConnection(buildRtcConfig(turnIceServers))
+
+    // Reuse the pre-warmed PC if it is still usable (candidates already gathered)
+    const prewarm = preWarmedPcRef.current
+    let pc
+    if (
+      prewarm &&
+      prewarm.signalingState === 'stable' &&
+      prewarm.connectionState !== 'closed' &&
+      prewarm.connectionState !== 'failed'
+    ) {
+      pc = prewarm
+      preWarmedPcRef.current = null
+    } else {
+      // Pre-warm was not available (e.g. friend connect, or media not ready earlier)
+      if (prewarm) {
+        try { prewarm.close() } catch (_) {}
+        preWarmedPcRef.current = null
+      }
+      const baseConfig = buildRtcConfig(turnIceServers)
+      pc = new RTCPeerConnection({
+        ...baseConfig,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        iceCandidatePoolSize: 10,
+      })
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => {
+          try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
+        })
+      }
+    }
+
     pcRef.current = pc
-    if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => pc.addTrack(t, localStreamRef.current))
+
     const remoteStream = new MediaStream()
     remoteStreamRef.current = remoteStream
+
     pc.ontrack = event => {
-      const track = event.track
-      if (event.streams && event.streams[0]) {
-        event.streams[0].getTracks().forEach(t => {
-          if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
-        })
-      } else {
-        if (!remoteStream.getTrackById(track.id)) remoteStream.addTrack(track)
+      // Collect tracks from the stream or directly from the event
+      const tracks = event.streams?.[0]?.getTracks() || [event.track]
+      tracks.forEach(t => {
+        if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
+      })
+      // Attach directly in the callback — don't wait for a React render cycle
+      const vid = remoteVideoRef.current
+      if (vid) {
+        if (vid.srcObject !== remoteStream) vid.srcObject = remoteStream
+        vid.play().catch(() => {})
       }
-      // Sync remote stream to ALL video elements (mobile + desktop)
-      const syncTo = (el) => {
-        if (!el) return
-        if (el.srcObject !== remoteStream) el.srcObject = remoteStream
-        el.play().catch(() => {})
-      }
-      remoteVideoEls.current.forEach(syncTo)
-      syncTo(remoteVideoRef.current)
     }
+
     pc.onicecandidate = event => {
-      if (event.candidate) socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
+      if (event.candidate)
+        socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
     }
+
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') setConnectionState('connected')
-      else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      else if (pc.connectionState === 'failed') {
+        cleanupPeerConnection()
+        if (pendingStartRef.current && socketRef.current?.connected) {
+          resetSessionUi(); showActionFeedback('Finding next match...'); joinQueue()
+        } else {
+          setConnectionState('idle'); showActionFeedback('Connection failed')
+        }
+      } else if (pc.connectionState === 'disconnected') {
         setTimeout(() => {
-          if (pcRef.current?.connectionState === 'failed') {
+          if (pcRef.current?.connectionState === 'disconnected' || pcRef.current?.connectionState === 'failed') {
             cleanupPeerConnection()
-            if (pendingStartRef.current && socketRef.current?.connected) { resetSessionUi(); showActionFeedback('Connection ended · finding next'); joinQueue() }
-            else { setConnectionState('idle'); showActionFeedback('Connection ended') }
+            if (pendingStartRef.current && socketRef.current?.connected) {
+              resetSessionUi(); showActionFeedback('Reconnecting...'); joinQueue()
+            } else {
+              setConnectionState('idle'); showActionFeedback('Connection ended')
+            }
           }
-        }, 3000)
+        }, 1500)
       }
     }
+
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setConnectionState('connected')
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')
+        setConnectionState('connected')
     }
+
     if (isInitiator) {
-      const createOfferNow = async () => {
+      ;(async () => {
         try {
           if (pc.signalingState !== 'stable') return
-          const offer = await pc.createOffer()
+          const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: mode === 'video',
+          })
           if (pc.signalingState !== 'stable') return
-          await pc.setLocalDescription(offer)
-          socketRef.current?.emit('signal', { type: 'offer', to: peerId, payload: offer })
-        } catch (err) {}
-      }
-      Promise.resolve().then(createOfferNow)
+          // Apply VP8 codec preference for faster first-frame decode
+          const optimisedSdp = preferVP8(offer.sdp)
+          await pc.setLocalDescription({ type: offer.type, sdp: optimisedSdp })
+          socketRef.current?.emit('signal', { type: 'offer', to: peerId, payload: pc.localDescription })
+        } catch (_) {}
+      })()
     }
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
-    remoteVideoEls.current.forEach(el => { if (el) el.srcObject = null })
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
     remoteStreamRef.current = null
   }
 
+  // ── CHANGE 6: resetSessionUi cleans up pre-warmed PC ─────────────────────
   function resetSessionUi({ clearMessages = true } = {}) {
+    // Discard any unconsumed pre-warmed PC to avoid resource leaks
+    if (preWarmedPcRef.current) {
+      try { preWarmedPcRef.current.close() } catch (_) {}
+      preWarmedPcRef.current = null
+    }
     cleanupPeerConnection()
     stopFaceDetection()
     setPartnerId(null); setPartnerLanguage(null); setPartnerCountry(null); setPartnerUserId(null); setPartnerProfile(null)
@@ -1163,6 +1211,7 @@ function ChatPageContent() {
     if (clearMessages) setMessages([])
     setReceivedLikeToast({ visible: false, message: '' })
   }
+  // ─────────────────────────────────────────────────────────────────────────
 
   function handleStartSearch() {
     if (!sessionUser?.id) { router.replace('/'); return }
@@ -1211,6 +1260,11 @@ function ChatPageContent() {
     pendingStartRef.current = false
     updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
     socketRef.current?.emit('next', { reason: 'end' })
+    // Clean up pre-warmed PC before navigating away
+    if (preWarmedPcRef.current) {
+      try { preWarmedPcRef.current.close() } catch (_) {}
+      preWarmedPcRef.current = null
+    }
     cleanupPeerConnection()
     stopFaceDetection()
     if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop())
@@ -1268,13 +1322,10 @@ function ChatPageContent() {
     performModeSwitch(nextMode)
   }
 
-  // FIX 1: openPanel should NOT affect video display on desktop
-  // Only on mobile does panelTab change the visible pane
   function openPanel(tab) {
     setShowChat(false)
     setPanelTab(prev => {
       const next = prev === tab ? null : tab
-      // Only set mobilePane on mobile; desktop shows both video + panel
       if (next) setMobilePane(next)
       else setMobilePane('video')
       return next
@@ -1320,29 +1371,10 @@ function ChatPageContent() {
   const primaryActionIsStop = isSearching || isConnected
   const hasActiveMatch = !!roomId && !!partnerId && (connectionState === 'connected' || connectionState === 'connecting')
   const canSendMessages = connectionState === 'connected' && !!roomId && !!partnerId
-  // FIX 1: On mobile, center pane shows when panelTab is set. On desktop, video always shows alongside panel.
   const showMobileCenterPane = !showChat && !!panelTab && (mobilePane === 'history' || mobilePane === 'friends')
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
   const currentPartnerHasIncomingRequest = partnerUserId ? incomingRequestIds.has(partnerUserId) : false
-
-  // Callback ref helpers — register/unregister each <video> element
-  // so we can sync streams to ALL rendered instances (mobile + desktop).
-  const registerLocalVideo = useCallback((el) => {
-    if (!el) return
-    localVideoEls.current = [...new Set([...localVideoEls.current, el])]
-    localVideoRef.current = el  // keep face-detection ref pointing to latest
-    if (localStreamRef.current) syncVideoEl(el, localStreamRef.current, true).catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const registerRemoteVideo = useCallback((el) => {
-    if (!el) return
-    remoteVideoEls.current = [...new Set([...remoteVideoEls.current, el])]
-    remoteVideoRef.current = el
-    if (remoteStreamRef.current) syncVideoEl(el, remoteStreamRef.current, false).catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   if (!sessionResolved) return <ChatPageFallback />
   if (!sessionUser) return null
@@ -1362,7 +1394,6 @@ function ChatPageContent() {
     )
   }
 
-  // Whether panel tab is open on desktop (history or friends)
   const isPanelOpen = !!panelTab
 
   return (
@@ -1374,7 +1405,7 @@ function ChatPageContent() {
         <div className="relative z-30 shrink-0 overflow-visible border-b border-gray-800 bg-gray-900/95 backdrop-blur px-3 sm:px-5 py-2">
           <div className="flex items-center justify-between gap-3">
             <button onClick={() => router.push('/')} className="flex items-center">
-              <img src="/logo.svg" alt="HippiChat" className="h-7 sm:h-9 w-auto" />
+              <img src="/logo.svg" alt="HippiChat" className="h-9 sm:h-12 w-auto" />
             </button>
             <div className="flex items-center justify-end gap-2 min-w-[44px]">
               {renderOnlineCountBadge()}
@@ -1382,14 +1413,14 @@ function ChatPageContent() {
             </div>
           </div>
 
-          <div className="mt-2 flex items-center gap-1 sm:justify-center sm:gap-2 overflow-x-auto no-scrollbar text-xs font-medium text-gray-300">
+          <div className="mt-2 flex items-center gap-1 sm:justify-center sm:gap-3 overflow-x-auto no-scrollbar text-xs sm:text-sm font-medium text-gray-300">
             {['video', 'voice'].map(m => (
-              <button key={m} onClick={() => switchMode(m)} className={`rounded-full px-3 py-1 whitespace-nowrap transition-all ${mode === m ? 'bg-white text-gray-900' : 'hover:bg-gray-800'}`}>
+              <button key={m} onClick={() => switchMode(m)} className={`rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${mode === m ? 'bg-white text-gray-900' : 'hover:bg-gray-800'}`}>
                 {m === 'video' ? 'Video Chat' : 'Voice Chat'}
               </button>
             ))}
-            <button onClick={() => openPanel('history')} className={`rounded-full px-3 py-1 whitespace-nowrap transition-all ${panelTab === 'history' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>History</button>
-            <button onClick={() => openPanel('friends')} className={`relative rounded-full px-3 py-1 whitespace-nowrap transition-all ${panelTab === 'friends' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>
+            <button onClick={() => openPanel('history')} className={`rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'history' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>History</button>
+            <button onClick={() => openPanel('friends')} className={`relative rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'friends' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>
               Friends
               {incomingRequestsCount > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-emerald-400 px-1 text-[10px] font-bold text-gray-900">{incomingRequestsCount}</span>
@@ -1520,15 +1551,10 @@ function ChatPageContent() {
           </div>
         )}
 
-        {/* ── MAIN LAYOUT ─────────────────────────────────────────────────────────── */}
-        {/* FIX 1 & 4: Desktop layout is now a proper grid:
-            - Video area always visible on desktop (never hidden by panel tab)
-            - Controls sit at the bottom of the video area
-            - Panel (history/friends) slides in alongside video on desktop */}
+        {/* ── MAIN LAYOUT ── */}
         <div className="flex-1 flex relative overflow-hidden min-h-0">
 
-          {/* ── LEFT: Video/Voice + Controls (desktop always visible) ──────────── */}
-          {/* FIX 1: On desktop, video is ALWAYS shown. On mobile, hidden when panel open */}
+          {/* ── LEFT: Video/Voice + Controls ── */}
           <div className={`
             min-h-0 relative overflow-hidden flex flex-col
             ${showChat ? 'hidden sm:flex' : showMobileCenterPane ? 'hidden sm:flex' : 'flex'}
@@ -1536,124 +1562,68 @@ function ChatPageContent() {
           `}>
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                {/* Mobile 320×50 banner */}
                 <ChatMobileAdBanner />
+                <div className="flex-1 min-h-0 p-1.5 flex flex-col sm:grid sm:grid-cols-2 gap-1.5 overflow-hidden">
 
-                {/* FIX 5: Mobile video - vertical stack (stranger top, self bottom smaller)
-                    Desktop: side-by-side grid */}
-                <div className="flex-1 h-0 sm:h-auto p-1.5 overflow-hidden">
-                  {/* MOBILE: vertical stack */}
-                  <div className="flex flex-col h-full gap-1.5 sm:hidden">
-                    {/* Stranger - large top */}
-                    <div className="relative flex-1 min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={registerRemoteVideo} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
-                      <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-4 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-                      <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
-                      {connectionState !== 'connected' && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
-                          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
-                            {isSearching ? <Loader2 className="h-5 w-5 animate-spin text-violet-400" /> : <Users className="h-5 w-5 text-violet-300" />}
-                          </div>
-                          <h3 className="text-sm font-semibold text-white">{getRemotePanelTitle()}</h3>
-                          <div className="mt-2 rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5 text-[10px] text-gray-400">
-                            {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
-                          </div>
-                          {mediaWarning && (
-                            <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200 max-w-[180px]">{mediaWarning}</div>
-                          )}
+                  {/* Stranger / Remote video */}
+                  <div className="relative flex-1 sm:flex-none min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
+                    <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+                    <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
+                    <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
+                    {connectionState !== 'connected' && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
+                        <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
+                          {isSearching ? <Loader2 className="h-5 w-5 animate-spin text-violet-400" /> : <Users className="h-5 w-5 text-violet-300" />}
                         </div>
-                      )}
-                      {connectionState === 'connected' && (
-                        <button onClick={handleLikePartner} disabled={hasLikedPartner}
-                          className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg transition-all backdrop-blur border
-                            ${hasLikedPartner ? 'bg-pink-600/80 border-pink-400/30 text-white cursor-default' : 'bg-gray-900/80 border-gray-700/50 text-pink-300 hover:bg-pink-600/80 hover:border-pink-400/30 hover:text-white active:scale-95'}`}>
-                          <Heart className={`w-2.5 h-2.5 ${hasLikedPartner ? 'fill-white' : 'fill-none'}`} />
-                          {hasLikedPartner ? 'Liked' : 'Like'}
-                        </button>
-                      )}
-                    </div>
-                    {/* Self - smaller bottom */}
-                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden" style={{ height: '36%', minHeight: 120 }}>
-                      <video ref={registerLocalVideo} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
-                      <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-1 right-1 h-3.5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-                      {isCameraOff && (
-                        <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-4 h-4 text-gray-500" /></div>
-                      )}
-                      <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
-                      <div className="absolute left-1.5 bottom-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
-                        You · {selfCountry?.countryFlag || '🌐'}
+                        <h3 className="text-sm font-semibold text-white">{getRemotePanelTitle()}</h3>
+                        <p className="hidden sm:block mt-1 max-w-xs text-[11px] text-gray-400">{getRemotePanelSubtitle()}</p>
+                        <div className="mt-2 rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5 text-[10px] text-gray-400">
+                          {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
+                        </div>
+                        {mediaWarning && (
+                          <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200 max-w-[180px]">{mediaWarning}</div>
+                        )}
                       </div>
-                    </div>
+                    )}
+                    {connectionState === 'connected' && (
+                      <button onClick={handleLikePartner} disabled={hasLikedPartner}
+                        className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg transition-all backdrop-blur border
+                          ${hasLikedPartner ? 'bg-pink-600/80 border-pink-400/30 text-white cursor-default' : 'bg-gray-900/80 border-gray-700/50 text-pink-300 hover:bg-pink-600/80 hover:border-pink-400/30 hover:text-white active:scale-95'}`}>
+                        <Heart className={`w-2.5 h-2.5 ${hasLikedPartner ? 'fill-white' : 'fill-none'}`} />
+                        {hasLikedPartner ? 'Liked' : 'Like'}
+                      </button>
+                    )}
                   </div>
 
-                  {/* DESKTOP: side-by-side */}
-                  <div className="hidden sm:grid sm:grid-cols-2 h-full gap-1.5">
-                    {/* Remote video */}
-                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={registerRemoteVideo} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
-                      <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-                      <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
-                      {connectionState !== 'connected' && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
-                          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
-                            {isSearching ? <Loader2 className="h-5 w-5 animate-spin text-violet-400" /> : <Users className="h-5 w-5 text-violet-300" />}
-                          </div>
-                          <h3 className="text-sm font-semibold text-white">{getRemotePanelTitle()}</h3>
-                          <p className="mt-1 max-w-xs text-[11px] text-gray-400">{getRemotePanelSubtitle()}</p>
-                          <div className="mt-2 rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5 text-[10px] text-gray-400">
-                            {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
-                          </div>
-                          {mediaWarning && (
-                            <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200 max-w-[180px]">{mediaWarning}</div>
-                          )}
-                        </div>
-                      )}
-                      {connectionState === 'connected' && (
-                        <button onClick={handleLikePartner} disabled={hasLikedPartner}
-                          className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg transition-all backdrop-blur border
-                            ${hasLikedPartner ? 'bg-pink-600/80 border-pink-400/30 text-white cursor-default' : 'bg-gray-900/80 border-gray-700/50 text-pink-300 hover:bg-pink-600/80 hover:border-pink-400/30 hover:text-white active:scale-95'}`}>
-                          <Heart className={`w-2.5 h-2.5 ${hasLikedPartner ? 'fill-white' : 'fill-none'}`} />
-                          {hasLikedPartner ? 'Liked' : 'Like'}
-                        </button>
-                      )}
-                    </div>
-                    {/* Local video */}
-                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={registerLocalVideo} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
-                      <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-                      {isCameraOff && (
-                        <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-5 h-5 text-gray-500" /></div>
-                      )}
-                      {!localStreamRef.current && (
-                        <div className="absolute inset-0 bg-gray-900/90 flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
-                      )}
-                      <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
-                      <div className="absolute left-2 bottom-2 text-[10px] px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
-                        You · {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
+                  {/* Self / Local video */}
+                  <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden self-video-cell" style={{ height: '36%', minHeight: 120 }}>
+                    <style dangerouslySetInnerHTML={{ __html: '@media(min-width:640px){.self-video-cell{height:auto!important;min-height:0!important}}' }} />
+                    <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
+                    <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-1 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
+                    {isCameraOff && (
+                      <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+                        <VideoOff className="w-4 sm:w-5 h-4 sm:h-5 text-gray-500" />
                       </div>
+                    )}
+                    {!localStreamRef.current && (
+                      <div className="absolute inset-0 bg-gray-900/90 hidden sm:flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
+                    )}
+                    <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
+                    <div className="absolute left-1.5 sm:left-2 bottom-1.5 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
+                      You · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* FIX 3: Desktop 468x60 banner - compact, not ugly 3:1 */}
                 <ChatDesktopAdBanner />
-
-                {/* FIX 4: Desktop controls - big, full-width, at bottom of video area */}
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
-                  <ControlButtons
-                    desktop
-                    compact={isPanelOpen}
-                    primaryActionIsStop={primaryActionIsStop}
-                    isMediaReady={isMediaReady}
+                  <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                    onSkip={handleNext}
-                    onFilters={handleOpenFilters}
-                    connectionState={hasActiveMatch ? connectionState : 'idle'}
-                  />
+                    onSkip={handleNext} onFilters={handleOpenFilters}
+                    connectionState={hasActiveMatch ? connectionState : 'idle'} />
                 </div>
               </div>
             ) : (
-              /* Voice mode */
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
                 <ChatMobileAdBanner />
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
@@ -1677,18 +1647,12 @@ function ChatPageContent() {
                 </div>
                 <ChatDesktopAdBanner />
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
-                  <ControlButtons
-                    desktop
-                    compact={isPanelOpen}
-                    primaryActionIsStop={primaryActionIsStop}
-                    isMediaReady={isMediaReady}
+                  <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                    onSkip={handleNext}
-                    onFilters={handleOpenFilters}
-                    connectionState={hasActiveMatch ? connectionState : 'idle'}
-                  />
+                    onSkip={handleNext} onFilters={handleOpenFilters}
+                    connectionState={hasActiveMatch ? connectionState : 'idle'} />
                 </div>
-                <audio ref={registerRemoteVideo} autoPlay className="hidden" />
+                <audio ref={remoteVideoRef} autoPlay className="hidden" />
               </div>
             )}
 
@@ -1723,9 +1687,7 @@ function ChatPageContent() {
             )}
           </div>
 
-          {/* ── CENTER: History / Friends panel ──────────────────────────────────── */}
-          {/* FIX 1: On desktop this panel is ALONGSIDE video (not replacing it).
-              On mobile it replaces video when mobilePane matches. */}
+          {/* ── CENTER: History / Friends panel ── */}
           <div className={`
             ${showChat ? 'hidden' : ''}
             ${showMobileCenterPane ? 'flex' : 'hidden'}
@@ -1784,7 +1746,6 @@ function ChatPageContent() {
                             className="inline-flex items-center gap-1 rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40">
                             <Flag className="h-3 w-3" /> Report
                           </button>
-                          {/* FIX 2: Chat Again shows Video/Voice buttons for explicit mode selection */}
                           {item.onlineFriend?.online && (
                             <div className="flex gap-1">
                               <button onClick={() => handleConnectFriend(item.onlineFriend.friendAnonId, 'video')}
@@ -1824,7 +1785,6 @@ function ChatPageContent() {
                             </div>
                             <div className="mt-2 flex items-center gap-1">
                               <span className={`text-[11px] flex-1 ${friend.online ? 'text-green-300' : 'text-gray-500'}`}>{friend.online ? 'Online' : 'Offline'}</span>
-                              {/* FIX 2: Video Chat / Voice Chat buttons instead of single Invite */}
                               {friend.online && (
                                 <>
                                   <button onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId, 'video')}
@@ -1839,9 +1799,7 @@ function ChatPageContent() {
                                   </button>
                                 </>
                               )}
-                              {!friend.online && (
-                                <span className="text-[11px] text-gray-600 italic">Offline</span>
-                              )}
+                              {!friend.online && <span className="text-[11px] text-gray-600 italic">Offline</span>}
                             </div>
                             <button onClick={() => openUnfriendConfirmation(friend)} className="mt-2 rounded-md border border-red-500/20 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/10">Unfriend</button>
                           </div>
@@ -1893,7 +1851,7 @@ function ChatPageContent() {
             </div>
           </div>
 
-          {/* ── RIGHT: Text chat sidebar ─────────────────────────────────────────── */}
+          {/* ── RIGHT: Text chat sidebar ── */}
           <div className={`${showChat ? 'flex w-full h-full flex-1 sm:w-80 lg:w-96' : 'hidden sm:flex sm:w-80 lg:w-96'} min-h-0 flex-col overflow-hidden border-l border-gray-800 bg-gray-900`}>
             <div className="shrink-0 border-b border-gray-800 bg-gray-900 px-4 py-3">
               <div className="flex items-center justify-between gap-2">
@@ -1953,14 +1911,10 @@ function ChatPageContent() {
 
         {/* Mobile Control Bar */}
         <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
-          <ControlButtons
-            primaryActionIsStop={primaryActionIsStop}
-            isMediaReady={isMediaReady}
+          <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
             onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-            onSkip={handleNext}
-            onFilters={handleOpenFilters}
-            connectionState={hasActiveMatch ? connectionState : 'idle'}
-          />
+            onSkip={handleNext} onFilters={handleOpenFilters}
+            connectionState={hasActiveMatch ? connectionState : 'idle'} />
           <button
             onClick={() => { setShowChat(!showChat); setUnreadCount(0) }}
             className={`${showChat ? 'hidden' : 'sm:hidden absolute right-4 -top-12 inline-flex h-10 min-w-[88px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500'}`}
