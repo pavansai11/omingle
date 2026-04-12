@@ -193,12 +193,16 @@ function ReceivedLikeToast({ message, visible }) {
 function loadMonetagForNextClick() {
   if (typeof window === 'undefined') return
   try {
+    // Remove any previous instance to force a fresh load each time
     document.getElementById('monetag-onclick-pop')?.remove()
     const s = document.createElement('script')
     s.id = 'monetag-onclick-pop'
-    s.dataset.zone = '10809114'
+    // Use the exact zone/src format from the official tag snippet
     s.src = 'https://al5sm.com/tag.min.js'
-    ;([document.documentElement, document.body].filter(Boolean).pop()).appendChild(s)
+    // dataset.zone MUST be set before appending so tag.min.js reads it on load
+    s.dataset.zone = '10809114'
+    // Append to body so it fires in proper document context
+    document.body.appendChild(s)
   } catch (e) {}
 }
 
@@ -352,6 +356,12 @@ function ChatPageContent() {
   const localStreamRef = useRef(null)
   const rawLocalStreamRef = useRef(null)
   const remoteStreamRef = useRef(null)
+  // Multi-element video refs: one ref per rendered <video> DOM node
+  // because React only attaches a single ref to the last element using it.
+  // We keep arrays of all video elements and sync streams to all of them.
+  const localVideoEls = useRef([])   // all <video> for local preview
+  const remoteVideoEls = useRef([])  // all <video> for remote stream
+  // Legacy single refs kept for face-detection (which uses localVideoRef)
   const localVideoRef = useRef(null)
   const remoteVideoRef = useRef(null)
   const callTimerRef = useRef(null)
@@ -647,18 +657,35 @@ function ChatPageContent() {
     setInteractionHistory(prev => prev.map(i => i.id === currentMatchHistoryIdRef.current ? { ...i, ...patch } : i))
   }
 
+  // Sync stream to a single video element
+  async function syncVideoEl(el, stream, muted = false) {
+    if (!el || !stream) return
+    if (el.srcObject !== stream) el.srcObject = stream
+    el.muted = muted
+    el.playsInline = true
+    try { await el.play() } catch (e) {}
+  }
+
   async function attachLocalPreviewStream(stream) {
-    if (!localVideoRef.current || !stream || mode !== 'video') return
-    if (localVideoRef.current.srcObject !== stream) localVideoRef.current.srcObject = stream
-    localVideoRef.current.muted = true
-    localVideoRef.current.playsInline = true
-    try { await localVideoRef.current.play() } catch (e) {}
+    if (!stream || mode !== 'video') return
+    // Sync to all registered local video elements
+    for (const el of localVideoEls.current) {
+      await syncVideoEl(el, stream, true)
+    }
+    // Also sync legacy ref for face detection
+    if (localVideoRef.current) {
+      await syncVideoEl(localVideoRef.current, stream, true)
+    }
   }
 
   async function attachRemotePreviewStream() {
-    if (!remoteVideoRef.current || !remoteStreamRef.current || mode !== 'video') return
-    if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current
-    try { await remoteVideoRef.current.play() } catch (e) {}
+    if (!remoteStreamRef.current || mode !== 'video') return
+    for (const el of remoteVideoEls.current) {
+      await syncVideoEl(el, remoteStreamRef.current, false)
+    }
+    if (remoteVideoRef.current) {
+      await syncVideoEl(remoteVideoRef.current, remoteStreamRef.current, false)
+    }
   }
 
   async function replacePeerConnectionVideoTrack(track) {
@@ -1076,10 +1103,14 @@ function ChatPageContent() {
       } else {
         if (!remoteStream.getTrackById(track.id)) remoteStream.addTrack(track)
       }
-      if (remoteVideoRef.current) {
-        if (remoteVideoRef.current.srcObject !== remoteStream) remoteVideoRef.current.srcObject = remoteStream
-        remoteVideoRef.current.play().catch(() => {})
+      // Sync remote stream to ALL video elements (mobile + desktop)
+      const syncTo = (el) => {
+        if (!el) return
+        if (el.srcObject !== remoteStream) el.srcObject = remoteStream
+        el.play().catch(() => {})
       }
+      remoteVideoEls.current.forEach(syncTo)
+      syncTo(remoteVideoRef.current)
     }
     pc.onicecandidate = event => {
       if (event.candidate) socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
@@ -1115,6 +1146,7 @@ function ChatPageContent() {
 
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
+    remoteVideoEls.current.forEach(el => { if (el) el.srcObject = null })
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
     remoteStreamRef.current = null
   }
@@ -1293,6 +1325,24 @@ function ChatPageContent() {
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
   const currentPartnerHasIncomingRequest = partnerUserId ? incomingRequestIds.has(partnerUserId) : false
+
+  // Callback ref helpers — register/unregister each <video> element
+  // so we can sync streams to ALL rendered instances (mobile + desktop).
+  const registerLocalVideo = useCallback((el) => {
+    if (!el) return
+    localVideoEls.current = [...new Set([...localVideoEls.current, el])]
+    localVideoRef.current = el  // keep face-detection ref pointing to latest
+    if (localStreamRef.current) syncVideoEl(el, localStreamRef.current, true).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const registerRemoteVideo = useCallback((el) => {
+    if (!el) return
+    remoteVideoEls.current = [...new Set([...remoteVideoEls.current, el])]
+    remoteVideoRef.current = el
+    if (remoteStreamRef.current) syncVideoEl(el, remoteStreamRef.current, false).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!sessionResolved) return <ChatPageFallback />
   if (!sessionUser) return null
@@ -1496,7 +1546,7 @@ function ChatPageContent() {
                   <div className="flex flex-col h-full gap-1.5 sm:hidden">
                     {/* Stranger - large top */}
                     <div className="relative flex-1 min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+                      <video ref={registerRemoteVideo} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-4 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
                       {connectionState !== 'connected' && (
@@ -1523,8 +1573,8 @@ function ChatPageContent() {
                       )}
                     </div>
                     {/* Self - smaller bottom */}
-                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden" style={{ height: '28%', minHeight: 100 }}>
-                      <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
+                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden" style={{ height: '36%', minHeight: 120 }}>
+                      <video ref={registerLocalVideo} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-1 right-1 h-3.5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-4 h-4 text-gray-500" /></div>
@@ -1540,7 +1590,7 @@ function ChatPageContent() {
                   <div className="hidden sm:grid sm:grid-cols-2 h-full gap-1.5">
                     {/* Remote video */}
                     <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+                      <video ref={registerRemoteVideo} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
                       {connectionState !== 'connected' && (
@@ -1569,7 +1619,7 @@ function ChatPageContent() {
                     </div>
                     {/* Local video */}
                     <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
-                      <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
+                      <video ref={registerLocalVideo} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-5 h-5 text-gray-500" /></div>
@@ -1638,7 +1688,7 @@ function ChatPageContent() {
                     connectionState={hasActiveMatch ? connectionState : 'idle'}
                   />
                 </div>
-                <audio ref={remoteVideoRef} autoPlay className="hidden" />
+                <audio ref={registerRemoteVideo} autoPlay className="hidden" />
               </div>
             )}
 

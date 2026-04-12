@@ -128,7 +128,6 @@ export default function HomePage() {
 
   if (step === 'landing') {
     return (
-      // FIX 6: Full-screen layout so CTA is always above the fold
       <div className="min-h-screen relative overflow-x-hidden flex flex-col bg-gray-950">
         <div className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-violet-600/8 rounded-full blur-3xl" />
 
@@ -147,7 +146,6 @@ export default function HomePage() {
             )}
           </nav>
 
-          {/* FIX 6: Hero — compact enough that CTA stays above fold on all screens */}
           <main className="flex flex-col items-center px-4 sm:px-6 pt-4 sm:pt-8 pb-4 max-w-4xl mx-auto w-full text-center">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-600/10 border border-violet-500/20 text-violet-300 text-xs sm:text-sm mb-4">
               <Sparkles className="w-3.5 h-3.5" />
@@ -165,7 +163,7 @@ export default function HomePage() {
 
             {renderOnlineCount()}
 
-            {/* FIX 6: CTA - prominent "Meet a Stranger" button, always visible */}
+            {/* CTA */}
             <div className="mt-4 sm:mt-5 flex flex-col sm:flex-row items-center gap-3">
               <button
                 onClick={() => { void handleStartChat('video') }}
@@ -187,7 +185,7 @@ export default function HomePage() {
 
             <p className="text-xs text-gray-500 mt-2">Google sign-in required · Video + voice · Friends & history</p>
 
-            {/* FIX 6: Phrase animation — compact horizontal below CTA */}
+            {/* Phrase animation */}
             <div className="mt-4 sm:mt-5 flex items-center gap-2 sm:gap-4">
               <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-xl px-3 sm:px-5 py-2 sm:py-3">
                 <div className="text-sm sm:text-lg font-medium">{HERO_PHRASES[phraseIndex].text}</div>
@@ -200,11 +198,14 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* FIX 6: Ad placement — no empty box, just render ads directly.
-                Mobile: 320x50 banner (already loaded from AdsterraBanner).
-                Desktop: 728x90. No wrapper border if ad is empty. */}
+            {/* Top banner ad — visible on both mobile and desktop */}
             <div className="mt-5 sm:mt-6 w-full flex justify-center">
               <AdsterraBanner />
+            </div>
+
+            {/* Native banner ad — placed ABOVE feature cards, visible on mobile too */}
+            <div className="mt-4 w-full">
+              <AdsterraNativeBanner />
             </div>
 
             {/* Feature cards */}
@@ -222,11 +223,6 @@ export default function HomePage() {
                   <p className="text-xs text-gray-400">{f.desc}</p>
                 </div>
               ))}
-            </div>
-
-            {/* Native banner ad below features — no box border */}
-            <div className="mt-5 w-full">
-              <AdsterraNativeBanner />
             </div>
 
             {/* Bottom CTA repeat for mobile users who scrolled past */}
