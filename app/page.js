@@ -200,15 +200,12 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* FIX 6: Ad placement — no empty box, just render ads directly.
-                Mobile: 320x50 banner (already loaded from AdsterraBanner).
-                Desktop: 728x90. No wrapper border if ad is empty. */}
+            {/* Feature cards */}
             <div className="mt-5 sm:mt-6 w-full flex justify-center">
               <AdsterraBanner />
             </div>
 
-            {/* Feature cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5 sm:mt-6 w-full">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 sm:mt-5 w-full">
               {[
                 { icon: Video, title: 'Video + Voice', desc: 'Choose between face-to-face video or voice-only matching.' },
                 { icon: MessageSquare, title: 'Text Chat Included', desc: 'Built-in text chat during every match.' },

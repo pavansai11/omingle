@@ -193,12 +193,15 @@ function ReceivedLikeToast({ message, visible }) {
 function loadMonetagForNextClick() {
   if (typeof window === 'undefined') return
   try {
-    document.getElementById('monetag-onclick-pop')?.remove()
+    const existing = document.querySelectorAll('script[data-monetag-onclick="true"]')
+    existing.forEach((node) => node.remove())
+    const parent = [document.documentElement, document.body].filter(Boolean).pop()
+    if (!parent) return
     const s = document.createElement('script')
-    s.id = 'monetag-onclick-pop'
+    s.dataset.monetagOnclick = 'true'
     s.dataset.zone = '10809114'
     s.src = 'https://al5sm.com/tag.min.js'
-    ;([document.documentElement, document.body].filter(Boolean).pop()).appendChild(s)
+    parent.appendChild(s)
   } catch (e) {}
 }
 
@@ -1493,9 +1496,9 @@ function ChatPageContent() {
                     Desktop: side-by-side grid */}
                 <div className="flex-1 h-0 sm:h-auto p-1.5 overflow-hidden">
                   {/* MOBILE: vertical stack */}
-                  <div className="flex flex-col h-full gap-1.5 sm:hidden">
+                  <div className="flex flex-col h-full gap-2 sm:hidden overflow-y-auto pb-1">
                     {/* Stranger - large top */}
-                    <div className="relative flex-1 min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
+                    <div className="relative shrink-0 aspect-[3/4] min-h-[280px] rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
                       <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-2 right-2 h-4 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
@@ -1522,12 +1525,15 @@ function ChatPageContent() {
                         </button>
                       )}
                     </div>
-                    {/* Self - smaller bottom */}
-                    <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden" style={{ height: '28%', minHeight: 100 }}>
+                    {/* Self - smaller bottom, but slightly larger than before */}
+                    <div className="relative shrink-0 aspect-[5/4] min-h-[150px] rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
                       <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
                       <img src="/logo.svg" alt="HippiChat watermark" className="pointer-events-none absolute bottom-1 right-1 h-3.5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                       {isCameraOff && (
                         <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-4 h-4 text-gray-500" /></div>
+                      )}
+                      {!localStreamRef.current && (
+                        <div className="absolute inset-0 bg-gray-900/90 flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
                       )}
                       <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
                       <div className="absolute left-1.5 bottom-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
