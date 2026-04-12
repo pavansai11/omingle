@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import Script from 'next/script'
 import GoogleAuthButton from '@/components/google-auth-button'
+import { AdsterraBanner, AdsterraNativeBanner } from '@/components/adsterra-ads'
 import SiteFooter from '@/components/site-footer'
 import { Mic, Video, MessageSquare, Shield, ArrowRight, X, Check, Sparkles, Loader2, Users } from 'lucide-react'
 
@@ -31,17 +31,11 @@ export default function HomePage() {
     return data?.user || null
   }, [])
 
-  const buildChatUrlForUser = useCallback((mode = 'video', user = sessionUser) => {
-    const primaryCode = user?.primaryLanguage?.code || 'en-US'
-    const additional = Array.isArray(user?.additionalLanguages) ? user.additionalLanguages : []
-    const others = additional.map((lang) => lang?.code).filter(Boolean).join(',')
-    return `/chat?mode=${mode}&lang=${primaryCode}${others ? `&others=${others}` : ''}`
-  }, [sessionUser])
+  // Chat URL — mode only, no lang param
+  const buildChatUrl = useCallback((mode = 'video') => `/chat?mode=${mode}`, [])
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setPhraseIndex((prev) => (prev + 1) % HERO_PHRASES.length)
-    }, 2500)
+    const interval = setInterval(() => setPhraseIndex((prev) => (prev + 1) % HERO_PHRASES.length), 2500)
     return () => clearInterval(interval)
   }, [])
 
@@ -61,7 +55,6 @@ export default function HomePage() {
     return () => { cancelled = true }
   }, [loadSession])
 
-  // Fetch live online count for homepage display
   useEffect(() => {
     async function fetchStats() {
       try {
@@ -77,19 +70,13 @@ export default function HomePage() {
 
   const allConsented = consent.age && consent.terms && consent.monitoring
 
-  const proceedToChat = useCallback((mode, user = sessionUser) => {
-    router.push(buildChatUrlForUser(mode, user))
-  }, [buildChatUrlForUser, router, sessionUser])
+  const proceedToChat = useCallback((mode) => router.push(buildChatUrl(mode)), [buildChatUrl, router])
 
   const handleStartChat = useCallback(async (mode) => {
     if (sessionLoading) return
     try {
       const freshUser = await loadSession()
-      if (freshUser) {
-        setSessionUser(freshUser)
-        proceedToChat(mode, freshUser)
-        return
-      }
+      if (freshUser) { setSessionUser(freshUser); proceedToChat(mode); return }
     } catch (error) {}
     setAuthIntentMode(mode)
     setShowAuthGate(true)
@@ -101,10 +88,9 @@ export default function HomePage() {
     setShowAuthGate(false)
     const mode = authIntentMode || 'video'
     setAuthIntentMode(null)
-    proceedToChat(mode, user)
+    proceedToChat(mode)
   }, [authIntentMode, proceedToChat])
 
-  // Online count display logic: only show if >= 100, otherwise show friendly fallback
   function renderOnlineCount() {
     if (onlineCount !== null && onlineCount >= 100) {
       return (
@@ -130,16 +116,9 @@ export default function HomePage() {
         <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">Sign in to continue</h3>
-            <button
-              onClick={() => { setShowAuthGate(false); setAuthIntentMode(null) }}
-              className="text-gray-400 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <button onClick={() => { setShowAuthGate(false); setAuthIntentMode(null) }} className="text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
           </div>
-          <p className="text-sm text-gray-400 mb-4">
-            Please sign in with your Google account before starting chat.
-          </p>
+          <p className="text-sm text-gray-400 mb-4">Please sign in with your Google account before starting chat.</p>
           <div className="flex justify-center">
             <GoogleAuthButton onSignInSuccess={handleAuthGateSignInSuccess} />
           </div>
@@ -156,7 +135,6 @@ export default function HomePage() {
       <div className="min-h-screen relative overflow-hidden flex flex-col bg-gray-950">
         <div className="pointer-events-none absolute inset-0 bg-gray-950" />
         <div className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-violet-600/8 rounded-full blur-3xl" />
-
         <div className="relative z-10 flex-1 bg-transparent">
           <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <button onClick={() => router.push('/')} className="flex items-center">
@@ -167,12 +145,7 @@ export default function HomePage() {
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading
               </div>
             ) : (
-              <GoogleAuthButton
-                compact
-                onSignInSuccess={setSessionUser}
-                onLogoutSuccess={() => setSessionUser(null)}
-                userOverride={sessionUser}
-              />
+              <GoogleAuthButton compact onSignInSuccess={setSessionUser} onLogoutSuccess={() => setSessionUser(null)} userOverride={sessionUser} />
             )}
           </nav>
 
@@ -183,21 +156,17 @@ export default function HomePage() {
             </div>
 
             <h1 className="text-5xl sm:text-7xl font-bold leading-tight mb-6">
-              Meet someone new.
-              <br />
-              <span className="bg-gradient-to-r from-violet-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-                Start talking instantly.
-              </span>
+              Meet someone new.<br />
+              <span className="bg-gradient-to-r from-violet-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Start talking instantly.</span>
             </h1>
 
             <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mb-8">
-              HippiChat makes random video and voice chat simple.
-              Meet strangers worldwide, skip quickly, add friends, and reconnect later.
+              HippiChat makes random video and voice chat simple. Meet strangers worldwide, skip quickly, add friends, and reconnect later.
             </p>
 
             {renderOnlineCount()}
 
-            <div className="flex items-center gap-4 sm:gap-8 mb-12">
+            <div className="flex items-center gap-4 sm:gap-8 mb-10">
               <div className="bg-gray-800/80 backdrop-blur border border-gray-700/50 rounded-2xl px-6 py-4">
                 <div className="text-2xl sm:text-3xl font-medium mb-1">{currentPhrase.text}</div>
                 <div className="text-xs text-gray-500">{currentPhrase.hint}</div>
@@ -209,6 +178,16 @@ export default function HomePage() {
               </div>
             </div>
 
+            {/* Adsterra banner — desktop 728x90, mobile 320x50 */}
+            <div className="w-full max-w-2xl mb-6 flex justify-center overflow-hidden rounded-xl border border-gray-800/60 bg-gray-900/70 py-1">
+              <AdsterraBanner />
+            </div>
+
+            {/* Adsterra native banner — 1:1 responsive, homepage only */}
+            <div className="w-full max-w-2xl mb-8 rounded-2xl border border-gray-800/60 bg-gray-900/70 overflow-hidden">
+              <AdsterraNativeBanner />
+            </div>
+
             <button
               onClick={() => { void handleStartChat('video') }}
               disabled={sessionLoading}
@@ -218,9 +197,7 @@ export default function HomePage() {
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
 
-            <p className="text-sm text-gray-500 mt-4">
-              Google sign-in required · Video + voice chat · Friends and history built in
-            </p>
+            <p className="text-sm text-gray-500 mt-4">Google sign-in required · Video + voice chat · Friends and history built in</p>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-20 w-full">
               {[
@@ -252,15 +229,9 @@ export default function HomePage() {
         <div className="relative z-10 bg-gray-900 border border-gray-800 rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold">Before we start</h2>
-            <button onClick={() => setStep('landing')} className="text-gray-400 hover:text-white transition-colors">
-              <X className="w-5 h-5" />
-            </button>
+            <button onClick={() => setStep('landing')} className="text-gray-400 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
           </div>
-
-          <p className="text-sm text-gray-400 mb-6">
-            HippiChat connects you with random strangers. Please review our guidelines:
-          </p>
-
+          <p className="text-sm text-gray-400 mb-6">HippiChat connects you with random strangers. Please review our guidelines:</p>
           <div className="space-y-4 mb-6">
             {[
               { key: 'age', label: <span>I confirm I am <strong>18 years or older</strong></span> },
@@ -278,11 +249,8 @@ export default function HomePage() {
               </label>
             ))}
           </div>
-
           <div className="bg-gray-800/50 rounded-xl p-4 mb-6 text-xs text-gray-400">
-            <p className="font-semibold text-gray-300 mb-2 flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-violet-400" /> Community Guidelines
-            </p>
+            <p className="font-semibold text-gray-300 mb-2 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-violet-400" /> Community Guidelines</p>
             <ul className="space-y-1 list-disc list-inside">
               <li>No nudity or sexual content</li>
               <li>No hate speech, harassment, or bullying</li>
@@ -290,12 +258,8 @@ export default function HomePage() {
               <li>Report abusive users immediately</li>
             </ul>
           </div>
-
-          <button
-            disabled={!allConsented}
-            onClick={() => setStep('mode')}
-            className={`w-full py-3 rounded-xl font-semibold transition-all duration-200 ${allConsented ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-[0.98]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}
-          >
+          <button disabled={!allConsented} onClick={() => setStep('mode')}
+            className={`w-full py-3 rounded-xl font-semibold transition-all duration-200 ${allConsented ? 'bg-violet-600 hover:bg-violet-500 text-white active:scale-[0.98]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}>
             I Agree &amp; Continue
           </button>
         </div>
@@ -308,9 +272,7 @@ export default function HomePage() {
     return (
       <div className="min-h-screen bg-gray-950 px-4 py-8 flex flex-col items-center justify-center">
         <div className="max-w-2xl mx-auto w-full">
-          <button onClick={() => setStep('consent')} className="text-gray-400 hover:text-white text-sm mb-8 flex items-center gap-1">
-            ← Back
-          </button>
+          <button onClick={() => setStep('consent')} className="text-gray-400 hover:text-white text-sm mb-8 flex items-center gap-1">← Back</button>
           <h2 className="text-2xl font-bold mb-2 text-center">How do you want to chat?</h2>
           <p className="text-gray-400 mb-8 text-center">Choose how you want to connect.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
@@ -320,9 +282,7 @@ export default function HomePage() {
               </div>
               <h3 className="text-lg font-bold mb-2">Video Chat</h3>
               <p className="text-sm text-gray-400 mb-4">See and hear your match instantly with the default HippiChat experience</p>
-              <div className="flex items-center gap-1.5 text-xs text-violet-400">
-                <MessageSquare className="w-3.5 h-3.5" /> Text chat always available
-              </div>
+              <div className="flex items-center gap-1.5 text-xs text-violet-400"><MessageSquare className="w-3.5 h-3.5" /> Text chat always available</div>
             </button>
             <button onClick={() => handleStartChat('voice')} className="group bg-gray-900/50 border border-gray-800 rounded-2xl p-8 text-left hover:border-violet-500/50 transition-all hover:bg-gray-900/80 active:scale-[0.98]">
               <div className="w-14 h-14 rounded-xl bg-purple-600/10 flex items-center justify-center mb-5 group-hover:bg-purple-600/20 transition-colors">
@@ -330,9 +290,7 @@ export default function HomePage() {
               </div>
               <h3 className="text-lg font-bold mb-2">Voice Only</h3>
               <p className="text-sm text-gray-400 mb-4">Talk without video when you want a lighter and more private experience</p>
-              <div className="flex items-center gap-1.5 text-xs text-purple-400">
-                <MessageSquare className="w-3.5 h-3.5" /> Text chat always available
-              </div>
+              <div className="flex items-center gap-1.5 text-xs text-purple-400"><MessageSquare className="w-3.5 h-3.5" /> Text chat always available</div>
             </button>
           </div>
         </div>
