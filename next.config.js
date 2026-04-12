@@ -1,10 +1,79 @@
 const isDev = process.env.NODE_ENV !== 'production';
 const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
 const primaryOrigin = allowedOrigins[0] || (isDev ? 'http://localhost:3000' : (process.env.NEXT_PUBLIC_BASE_URL || 'https://hippichat.com'))
-const connectSrc = ["'self'", 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'https://rtc.live.cloudflare.com', 'https://ipapi.co', 'https:', 'wss:'].join(' ')
-const scriptSrc = ["'self'", "'unsafe-inline'", 'https://accounts.google.com', 'https://pagead2.googlesyndication.com', 'https://pl29014129.profitablecpmratenetwork.com', 'https://theoreticalassertshame.com'].join(' ')
-const frameSrc = ["'self'", 'https://accounts.google.com', 'https://googleads.g.doubleclick.net', 'https://tpc.googlesyndication.com', 'https://pl29014129.profitablecpmratenetwork.com', 'https://theoreticalassertshame.com'].join(' ')
+
+// ── Adsterra domains ──────────────────────────────────────────────────────────
+// theoreticalassertshame.com already present; add the Google ad-quality domain
+// that Adsense/Adsterra injects at runtime, plus the sodar subdomain.
+const adsterraDomain = 'https://theoreticalassertshame.com'
+const googleAdDomains = [
+  'https://pagead2.googlesyndication.com',
+  'https://ep2.adtrafficquality.google',       // sodar2.js parent — was blocked
+  'https://adtrafficquality.google',
+  'https://tpc.googlesyndication.com',
+  'https://googleads.g.doubleclick.net',
+]
+
+// ── Monetag vignette ──────────────────────────────────────────────────────────
+// The working script URL is n6wxm.com (not ophoacit.com which was old/wrong).
+const moneTagDomains = [
+  'https://n6wxm.com',       // vignette loader — new correct URL
+  'https://ophoacit.com',    // kept for fallback / old cached references
+]
+
+// ── face-api model + CDN ──────────────────────────────────────────────────────
+// face-api.js is loaded dynamically from jsDelivr; its model weights are also
+// fetched from jsDelivr, so both the script and the fetch() must be allowed.
+const faceApiDomains = [
+  'https://cdn.jsdelivr.net',
+]
+
+// ── Cloudflare Analytics (beacon) ─────────────────────────────────────────────
+// Cloudflare injects its beacon script from static.cloudflareinsights.com.
+// Allow it to avoid noisy CSP errors, but it is non-critical.
+const cloudflareDomains = [
+  'https://static.cloudflareinsights.com',
+  'https://cloudflareinsights.com',
+]
+
+// ── Adsterra native/banner (profitablecpmratenetwork) ────────────────────────
+const profitDomain = 'https://pl29014129.profitablecpmratenetwork.com'
+
+// Assemble directives
+const connectSrc = [
+  "'self'",
+  'https://accounts.google.com',
+  'https://oauth2.googleapis.com',
+  'https://rtc.live.cloudflare.com',
+  'https://ipapi.co',
+  'https://cdn.jsdelivr.net',        // face-api model weights (fetch)
+  'https://cloudflareinsights.com',  // beacon ping
+  'https:',
+  'wss:',
+].join(' ')
+
+const scriptSrc = [
+  "'self'",
+  "'unsafe-inline'",
+  'https://accounts.google.com',
+  ...googleAdDomains,
+  adsterraDomain,
+  profitDomain,
+  ...moneTagDomains,
+  ...faceApiDomains,
+  ...cloudflareDomains,
+].join(' ')
+
+const frameSrc = [
+  "'self'",
+  'https://accounts.google.com',
+  ...googleAdDomains,
+  adsterraDomain,
+  profitDomain,
+].join(' ')
+
 const imgSrc = ["'self'", 'data:', 'blob:', 'https:'].join(' ')
+
 const csp = [
   "default-src 'self'",
   `img-src ${imgSrc}`,
@@ -21,31 +90,23 @@ const csp = [
 
 const nextConfig = {
   output: 'standalone',
-  // Keep development artifacts isolated from production/build artifacts.
-  // This avoids `.next` manifest/chunk corruption when switching between
-  // `yarn build` and the custom Socket.IO dev server.
   distDir: isDev ? '.next-dev' : '.next',
   images: {
     unoptimized: true,
   },
   experimental: {
-    // Remove if not using Server Components
     serverComponentsExternalPackages: ['mongodb'],
   },
   webpack(config, { dev }) {
     if (dev) {
-      // Reduce CPU/memory from file watching
       config.watchOptions = {
-        poll: 2000, // check every 2 seconds
-        aggregateTimeout: 300, // wait before rebuilding
+        poll: 2000,
+        aggregateTimeout: 300,
         ignored: ['**/node_modules'],
       };
     }
     return config;
   },
-  // Keep more dev assets/chunks alive.
-  // Very small on-demand entry buffers can cause `/_next/static/*` 404s
-  // with the app router + custom server during local development.
   onDemandEntries: {
     maxInactiveAge: 60 * 1000,
     pagesBufferLength: 8,

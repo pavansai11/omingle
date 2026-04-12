@@ -2,28 +2,32 @@
 
 import { useEffect } from 'react'
 
+// Zone ID for the Monetag vignette ad unit
+const MONETAG_ZONE_ID = '10800687'
+
 /**
  * MonetagVignetteLoader
- * Loads the Monetag vignette/interstitial script once on mount.
- * The actual trigger is done imperatively via window.show_XXXXX()
- * which is called from specific UX actions (skip threshold, friend request, filters).
- *
- * Replace ZONE_ID with your real Monetag zone ID.
+ * Loads the Monetag vignette script once on mount using the correct CDN URL.
+ * The vignette is triggered imperatively via triggerMonetagVignette().
  */
-const MONETAG_ZONE_ID = '10800687' // Replace with your actual Monetag vignette zone ID
-
 export default function MonetagVignetteLoader() {
   useEffect(() => {
     if (typeof window === 'undefined') return
-    // Load Monetag script once
-    const existing = document.querySelector(`script[data-monetag="${MONETAG_ZONE_ID}"]`)
-    if (existing) return
 
+    const scriptId = `monetag-vignette-${MONETAG_ZONE_ID}`
+    if (document.getElementById(scriptId)) return
+
+    // ── Inline the vignette bootstrap exactly as Monetag documents it ────────
+    // This mimics: (function(s){s.dataset.zone='ZONE',s.src='https://n6wxm.com/vignette.min.js'})
+    //              ([document.documentElement, document.body].filter(Boolean).pop()
+    //               .appendChild(document.createElement('script')))
+    const container = [document.documentElement, document.body].filter(Boolean).pop()
     const script = document.createElement('script')
-    script.src = `https://ophoacit.com/1?z=${MONETAG_ZONE_ID}`
+    script.id = scriptId
+    script.src = 'https://n6wxm.com/vignette.min.js'
     script.async = true
-    script.dataset.monetag = MONETAG_ZONE_ID
-    document.head.appendChild(script)
+    script.dataset.zone = MONETAG_ZONE_ID
+    container.appendChild(script)
   }, [])
 
   return null
@@ -31,7 +35,8 @@ export default function MonetagVignetteLoader() {
 
 /**
  * Imperatively trigger the Monetag vignette.
- * Call this from action handlers (skip count threshold, friend request, filters).
+ * Call this from specific UX actions (skip threshold, friend request, filters).
+ * Safe to call before the script loads — it will be a no-op.
  */
 export function triggerMonetagVignette() {
   try {
@@ -40,6 +45,6 @@ export function triggerMonetagVignette() {
       window[fnName]()
     }
   } catch (e) {
-    // Silently fail if ad blocker or script not loaded
+    // Silently fail — ad blocker or script not yet loaded
   }
 }

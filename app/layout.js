@@ -1,5 +1,6 @@
 import './globals.css'
 import MonetagVignetteLoader from '@/components/monetag-ad'
+import { AdsterraBanner } from '@/components/adsterra-ads'
 
 export const metadata = {
   title: 'HippiChat — Random Video & Voice Chat',
@@ -32,8 +33,20 @@ export default function RootLayout({ children }) {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
       </head>
       <body className="bg-gray-950 text-white antialiased min-h-screen">
-        {/* Monetag vignette loader — fires only on specific actions */}
+        {/* Monetag vignette loader — triggers on specific user actions */}
         <MonetagVignetteLoader />
+
+        {/*
+          ── Adsterra top banner ───────────────────────────────────────────────
+          Renders a 728×90 banner on desktop and 320×50 on mobile.
+          Sits at the very top of every page, below the browser chrome.
+          You can move this inside specific page layouts if you only want
+          it on the home page — just import AdsterraBanner there instead.
+        */}
+        <div className="w-full bg-gray-950 flex justify-center py-1 border-b border-gray-900">
+          <AdsterraBanner />
+        </div>
+
         {children}
       </body>
     </html>
