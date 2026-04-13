@@ -105,6 +105,17 @@ function assertProductionConfig() {
 assertProductionConfig();
 
 app.prepare().then(() => {
+  // ── Startup: purge any stale legacy queue keys from previous code versions.
+  // The old shared-set keys (v2, v3) stored all modes mixed together and can
+  // still exist in Redis with up to 10-minute TTLs.  Deleting them on startup
+  // ensures the v4 per-mode sets are the only authoritative source of truth.
+  Promise.all([
+    redis.delKey('hippichat:queue:v2').catch(() => null),
+    redis.delKey('hippichat:queue-members:v3').catch(() => null),
+    redis.delKey('hippichat:queue-members').catch(() => null),
+  ]).then(() => logInfo('[Startup] Legacy queue keys pruned'))
+    .catch(() => {});
+
   const httpServer = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url, true);
@@ -150,6 +161,11 @@ app.prepare().then(() => {
   const friendsByUser = new Map(); // anonUserId -> Set<anonUserId>
   const userProfiles = new Map(); // anonUserId -> { countryName, countryFlag }
   const pendingFriendInvites = new Map(); // inviteId -> { inviterUserId, inviterSocketId, inviteeUserId, inviteeSocketId, mode, timeout }
+  // Per-socket token that is replaced on every new join-queue call.
+  // Any in-flight coroutine from an older call detects the mismatch and aborts,
+  // preventing two concurrent join-queue calls from interleaving their Redis writes
+  // and leaving a socket registered in the wrong mode set.
+  const joinQueueTokens = new Map(); // socketId -> token string
 
   // Simple presence count (connected sockets)
   let connectedCount = 0;
@@ -158,7 +174,13 @@ app.prepare().then(() => {
   const QUEUE_TTL_SECONDS = 600;
   const ROOM_TTL_SECONDS = 2 * 60 * 60;
   const QUEUE_KEY = 'hippichat:queue:v2'; // kept for legacy compat, no longer the live queue
-  const QUEUE_MEMBERS_KEY = 'hippichat:queue-members:v3';
+  // v3 (single shared set) is retired — v4 uses one set per mode so cross-mode
+  // candidates are physically impossible to select.
+  const QUEUE_MEMBERS_VIDEO_KEY = 'hippichat:queue-members:v4:video';
+  const QUEUE_MEMBERS_VOICE_KEY = 'hippichat:queue-members:v4:voice';
+  function getQueueMembersKey(mode) {
+    return normalizeMode(mode) === 'voice' ? QUEUE_MEMBERS_VOICE_KEY : QUEUE_MEMBERS_VIDEO_KEY;
+  }
   const QUEUE_CLAIM_LOCK_PREFIX = 'hippichat:queue-claim:';
 
   function getQueueEntryKey(socketId) {
@@ -245,18 +267,24 @@ app.prepare().then(() => {
 
   async function addToRedisQueue(entry) {
     try {
+      const entryMode = normalizeMode(entry.mode);
+      const membersKey = getQueueMembersKey(entryMode);
+      // Belt-and-suspenders: also remove from the OTHER mode set so that a
+      // socket can never appear in both sets simultaneously.
+      const otherMembersKey = entryMode === 'voice' ? QUEUE_MEMBERS_VIDEO_KEY : QUEUE_MEMBERS_VOICE_KEY;
       const entryData = {
         socketId: entry.socketId,
         identityId: getIdentityId(entry),
-        mode: entry.mode,
+        mode: entryMode,
         interests: entry.interests || [],
         joinedAt: entry.joinedAt instanceof Date ? entry.joinedAt.toISOString() : (entry.joinedAt || new Date().toISOString()),
       };
 
       await Promise.all([
         redis.setJson(getQueueEntryKey(entry.socketId), entryData, QUEUE_TTL_SECONDS),
-        redis.sadd(QUEUE_MEMBERS_KEY, entry.socketId),
-        redis.expire(QUEUE_MEMBERS_KEY, QUEUE_TTL_SECONDS).catch(() => 0),
+        redis.sadd(membersKey, entry.socketId),
+        redis.expire(membersKey, QUEUE_TTL_SECONDS).catch(() => 0),
+        redis.srem(otherMembersKey, entry.socketId).catch(() => 0), // prevent ghost entries in wrong mode set
       ]);
     } catch (err) {
       logError('[Redis] Failed to add to queue:', err?.message || err);
@@ -265,9 +293,12 @@ app.prepare().then(() => {
 
   async function removeFromRedisQueue(socketId) {
     try {
+      // Remove from both per-mode sets — srem on a non-member is a no-op,
+      // so this is safe and ensures no ghost entries remain in either set.
       await Promise.all([
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
-        redis.srem(QUEUE_MEMBERS_KEY, socketId).catch(() => 0),
+        redis.srem(QUEUE_MEMBERS_VIDEO_KEY, socketId).catch(() => 0),
+        redis.srem(QUEUE_MEMBERS_VOICE_KEY, socketId).catch(() => 0),
         releaseQueueClaimLock(socketId),
       ]);
     } catch (err) {
@@ -277,17 +308,24 @@ app.prepare().then(() => {
 
   async function getRedisQueueLength() {
     try {
-      return await redis.scard(QUEUE_MEMBERS_KEY).catch(() => 0);
+      const [video, voice] = await Promise.all([
+        redis.scard(QUEUE_MEMBERS_VIDEO_KEY).catch(() => 0),
+        redis.scard(QUEUE_MEMBERS_VOICE_KEY).catch(() => 0),
+      ]);
+      return (video || 0) + (voice || 0);
     } catch {
       return 0;
     }
   }
 
   async function findAndClaimFromRedisQueue(socketId, mode, interests = []) {
+    const resolvedMode = normalizeMode(mode);
     const normalizedInterests = normalizeInterestKeywords(interests);
 
-    // Round 1: single read of the member list
-    const members = await redis.smembers(QUEUE_MEMBERS_KEY).catch(() => []);
+    // Round 1: read only the set for the requested mode — cross-mode candidates
+    // are impossible at this level, no in-memory filtering needed.
+    const membersKey = getQueueMembersKey(resolvedMode);
+    const members = await redis.smembers(membersKey).catch(() => []);
     const currentMembers = Array.isArray(members) ? members : [];
 
     const candidateIds = currentMembers.filter(
@@ -295,14 +333,14 @@ app.prepare().then(() => {
     );
     if (!candidateIds.length) return null;
 
-    // Round 2: fetch all candidate entries IN PARALLEL (biggest saving)
+    // Round 2: fetch all candidate entries IN PARALLEL
     const entries = await Promise.all(
       candidateIds.map((id) => redis.getJson(getQueueEntryKey(id)).catch(() => null))
     );
 
-    // Filter valid candidates matching the requested mode
+    // Validate: entry must exist AND be the correct mode (defense-in-depth).
     const candidates = entries
-      .map((entry, i) => (entry && entry.mode === mode ? entry : null))
+      .map((entry) => (entry && normalizeMode(entry.mode) === resolvedMode ? entry : null))
       .filter(Boolean);
 
     if (!candidates.length) return null;
@@ -339,18 +377,29 @@ app.prepare().then(() => {
     matchingInProgress.add(socketId);
 
     try {
+      // Re-fetch after holding the lock to guard against concurrent claims.
       const [selectedEntry, requesterEntry] = await Promise.all([
         redis.getJson(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.getJson(getQueueEntryKey(socketId)).catch(() => null),
       ]);
 
       if (!selectedEntry || !requesterEntry) return null;
-      if (selectedEntry.mode !== mode || requesterEntry.mode !== mode) return null;
+
+      // Final mode assertion — all three must agree.
+      if (
+        normalizeMode(selectedEntry.mode) !== resolvedMode ||
+        normalizeMode(requesterEntry.mode) !== resolvedMode
+      ) {
+        logWarn('[Queue] Mode mismatch after lock — discarding claim:', {
+          selected: selectedEntry.mode, requester: requesterEntry.mode, expected: resolvedMode,
+        });
+        return null;
+      }
 
       await Promise.all([
         redis.delKey(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
-        redis.srem(QUEUE_MEMBERS_KEY, selected.socketId, socketId).catch(() => 0),
+        redis.srem(membersKey, selected.socketId, socketId).catch(() => 0),
       ]);
 
       return selected;
@@ -421,30 +470,39 @@ app.prepare().then(() => {
     // Prune stale Redis queue entries (sockets no longer connected)
     // We do this async but fire-and-forget; failures are non-critical
     queueBackground((async () => {
-      const members = await redis.smembers(QUEUE_MEMBERS_KEY).catch(() => []) || [];
-      const validMembers = [];
-      for (const socketId of members) {
-        if (activeSocketIds.has(socketId)) {
-          // Check entry hasn't been stale too long
-          const entry = await redis.getJson(getQueueEntryKey(socketId)).catch(() => null);
-          if (entry) {
-            const joinedAt = new Date(entry.joinedAt || now).getTime();
-            if (now - joinedAt < 10 * 60 * 1000) {
-              validMembers.push(socketId);
-              continue;
+      // Collect members from BOTH per-mode sets and clean each independently.
+      const [videoMembers, voiceMembers] = await Promise.all([
+        redis.smembers(QUEUE_MEMBERS_VIDEO_KEY).catch(() => []),
+        redis.smembers(QUEUE_MEMBERS_VOICE_KEY).catch(() => []),
+      ]);
+
+      for (const [membersKey, members] of [
+        [QUEUE_MEMBERS_VIDEO_KEY, videoMembers || []],
+        [QUEUE_MEMBERS_VOICE_KEY, voiceMembers || []],
+      ]) {
+        const validMembers = [];
+        for (const socketId of members) {
+          if (activeSocketIds.has(socketId)) {
+            const entry = await redis.getJson(getQueueEntryKey(socketId)).catch(() => null);
+            if (entry) {
+              const joinedAt = new Date(entry.joinedAt || now).getTime();
+              if (now - joinedAt < 10 * 60 * 1000) {
+                validMembers.push(socketId);
+                continue;
+              }
             }
           }
+          // Remove stale entry key
+          await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
         }
-        // Remove stale entry
-        await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
-      }
-      if (validMembers.length !== members.length) {
-        const staleMembers = members.filter((socketId) => !validMembers.includes(socketId));
-        if (staleMembers.length) {
-          await redis.srem(QUEUE_MEMBERS_KEY, ...staleMembers).catch(() => 0);
-        }
-        if (validMembers.length) {
-          await redis.expire(QUEUE_MEMBERS_KEY, QUEUE_TTL_SECONDS).catch(() => 0);
+        if (validMembers.length !== members.length) {
+          const staleMembers = members.filter((id) => !validMembers.includes(id));
+          if (staleMembers.length) {
+            await redis.srem(membersKey, ...staleMembers).catch(() => 0);
+          }
+          if (validMembers.length) {
+            await redis.expire(membersKey, QUEUE_TTL_SECONDS).catch(() => 0);
+          }
         }
       }
     })(), '[Runtime] Failed to prune Redis queue');
@@ -485,6 +543,10 @@ app.prepare().then(() => {
       if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) {
         userReputation.delete(userId);
       }
+    }
+
+    for (const [socketId] of joinQueueTokens.entries()) {
+      if (!activeSocketIds.has(socketId)) joinQueueTokens.delete(socketId);
     }
 
     for (const [userId, profile] of userProfiles.entries()) {
@@ -886,7 +948,12 @@ app.prepare().then(() => {
   async function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
     const roomId = options.roomId || generateId();
     const resolvedMode = normalizeMode(options.mode || sessionA.mode || sessionB.mode);
-    if (normalizeMode(sessionA.mode) !== resolvedMode || normalizeMode(sessionB.mode) !== resolvedMode) {
+    // Strict mode guard: both sessions AND the requested mode must all agree.
+    // This is the single authoritative check — every caller relies on it.
+    const modeA = normalizeMode(sessionA.mode);
+    const modeB = normalizeMode(sessionB.mode);
+    if (modeA !== resolvedMode || modeB !== resolvedMode || modeA !== modeB) {
+      logWarn('[Match] Mode mismatch — refusing to pair:', { modeA, modeB, resolvedMode, socketIdA, socketIdB });
       return null;
     }
     const matchedInterests = getMatchedInterests(sessionA.interests || [], sessionB.interests || []);
@@ -1062,6 +1129,14 @@ app.prepare().then(() => {
       logDebug('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
       const authUser = socket.data?.authUser || null
 
+      // Issue a fresh token for this join attempt.  If a newer join-queue event
+      // arrives for the same socket while this one is suspended at an await, the
+      // token will differ and we bail out — preventing two coroutines from
+      // writing to Redis concurrently and leaving the socket in the wrong mode set.
+      const joinToken = generateId();
+      joinQueueTokens.set(socket.id, joinToken);
+      const isThisJoinCurrent = () => joinQueueTokens.get(socket.id) === joinToken;
+
       // Clean up any existing room/queue membership AND check moderation in parallel
       const [, , moderationBlock] = await Promise.all([
         leaveRoom(socket),
@@ -1072,6 +1147,12 @@ app.prepare().then(() => {
           socketId: socket.id,
         })),
       ]);
+
+      // Abort if a newer join-queue already superseded this one
+      if (!isThisJoinCurrent()) {
+        logDebug('[JoinQueue] Superseded after cleanup, aborting', socket.id);
+        return;
+      }
 
       const session = {
         socketId: socket.id,
@@ -1128,8 +1209,33 @@ app.prepare().then(() => {
       // This ensures both users are visible to each other during concurrent joins.
       await addToRedisQueue(session);
 
+      // Second token check: if a newer join-queue wrote its own entry to Redis
+      // after ours, our write may have overwritten the correct one.  Clean up and
+      // yield to the newer coroutine which is already running.
+      if (!isThisJoinCurrent()) {
+        logDebug('[JoinQueue] Superseded after addToRedisQueue, removing stale entry', socket.id);
+        await removeFromRedisQueue(socket.id);
+        return;
+      }
+
       // Try to find and atomically claim a waiting match
-      const match = await findMatch(socket.id, session.mode, session.interests);
+      let match = await findMatch(socket.id, session.mode, session.interests);
+
+      // Retry with brief delays to handle simultaneous-join race conditions.
+      // When two users join at the same moment, Redis lock contention can cause
+      // one side's findMatch to return null even though the other user IS in queue.
+      // The other side will have already emitted a 'matched' event in that case
+      // (session.roomId gets set), so we stop retrying if already matched.
+      if (!match) {
+        for (const delayMs of [250, 500]) {
+          await new Promise(r => setTimeout(r, delayMs));
+          const currentSession = userSessions.get(socket.id);
+          // Stop if disconnected, left queue, or already matched by the other side
+          if (!currentSession?.inQueue || currentSession?.roomId) break;
+          match = await findMatch(socket.id, session.mode, session.interests);
+          if (match) break;
+        }
+      }
 
       if (match) {
         const matchSession = userSessions.get(match.socketId);
@@ -1149,8 +1255,11 @@ app.prepare().then(() => {
         }
 
         if (normalizeMode(matchSession.mode) !== session.mode) {
-          // Mode mismatch — put both back in queue
+          // Mode mismatch after claiming — return both users to their own queues.
+          // Re-add the match candidate first so they aren't stranded.
+          matchSession.inQueue = true;
           await addToRedisQueue(matchSession);
+          session.inQueue = true;
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
           socket.emit('queue-status', {
@@ -1517,6 +1626,10 @@ app.prepare().then(() => {
         return;
       }
       const inviteId = generateId();
+      // The mode is determined exclusively by what the inviter explicitly requested,
+      // falling back to the inviter's own current mode — never the invitee's mode,
+      // which could differ and cause cross-mode connections.
+      const resolvedInviteMode = requestedMode || normalizeMode(session.mode) || 'video';
       const timeout = setTimeout(() => {
         pendingFriendInvites.delete(inviteId);
         queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear expired pending invite');
@@ -1529,7 +1642,7 @@ app.prepare().then(() => {
         inviterSocketId: socket.id,
         inviteeUserId: friendAnonId,
         inviteeSocketId: friendSocketId,
-        mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
+        mode: resolvedInviteMode,
         timeout,
       });
       queueBackground(setPendingInvite(inviteId, pendingFriendInvites.get(inviteId)), '[Redis] Failed to persist pending invite');
@@ -1537,7 +1650,7 @@ app.prepare().then(() => {
       io.to(friendSocketId).emit('friend-connect-invite', {
         inviteId,
         fromUserId: myAnon,
-        mode: requestedMode || normalizeMode(session.mode) || normalizeMode(friendSession.mode),
+        mode: resolvedInviteMode,
         profile: buildProfileSnapshot(session),
       });
       socket.emit('friend-connect-result', { ok: true, pending: true, inviteId });
@@ -1569,8 +1682,12 @@ app.prepare().then(() => {
         return;
       }
       const inviteMode = normalizeMode(invite.mode);
+      // Forcibly set both sessions to the agreed invite mode before pairing.
+      // This is the single source of truth — both sides must use the same mode
+      // that the inviter originally requested.
       inviterSession.mode = inviteMode;
       inviteeSession.mode = inviteMode;
+      logDebug('[FriendConnect] Pairing with mode:', inviteMode, invite.inviterSocketId, '<->', socket.id);
 
       await leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
       await removeFromQueue(invite.inviterSocketId);
@@ -1646,6 +1763,7 @@ app.prepare().then(() => {
 
     socket.on('disconnect', async (reason) => {
       logDebug('[Socket] Disconnected:', socket.id, reason);
+      joinQueueTokens.delete(socket.id);
       const session = userSessions.get(socket.id);
       await leaveRoom(socket);
       await removeFromQueue(socket.id);
@@ -1672,6 +1790,71 @@ app.prepare().then(() => {
       logError('[Runtime] Failed during prune/log cycle:', error?.message || error);
     }
   }, 60_000);
+
+  // ── Periodic queue scanner ────────────────────────────────────────────────
+  // Runs every 1.5 s. Picks up any waiting users that were missed due to
+  // simultaneous-join race conditions (both sides' initial findMatch ran
+  // before the other's addToRedisQueue completed in Redis).
+  //
+  // Each mode queue is scanned independently — cross-mode candidates cannot
+  // appear because we read from mode-specific Redis sets.
+  setInterval(async () => {
+    try {
+      for (const scanMode of ['video', 'voice']) {
+        const membersKey = getQueueMembersKey(scanMode);
+        const members = await redis.smembers(membersKey).catch(() => []);
+        if (!Array.isArray(members) || members.length < 2) continue;
+
+        // Only consider sockets with active in-memory sessions in this mode.
+        const candidates = members.filter(sid => {
+          const s = userSessions.get(sid);
+          return s?.inQueue && !s?.roomId && normalizeMode(s.mode) === scanMode;
+        });
+        if (candidates.length < 2) continue;
+
+        // Sort by wait time so longest-waiting users are tried first.
+        candidates.sort((a, b) => {
+          const sA = userSessions.get(a);
+          const sB = userSessions.get(b);
+          return new Date(sA?.joinedAt || 0).getTime() - new Date(sB?.joinedAt || 0).getTime();
+        });
+
+        // Attempt one match per mode per scan cycle (avoids thundering herd).
+        for (const socketId of candidates) {
+          const session = userSessions.get(socketId);
+          if (!session?.inQueue || session?.roomId) continue;
+
+          // Only retry for users who have been waiting > 800 ms.
+          const waitMs = session.joinedAt ? Date.now() - new Date(session.joinedAt).getTime() : 0;
+          if (waitMs < 800) continue;
+
+          const found = await findMatch(socketId, scanMode, session.interests).catch(() => null);
+          if (!found) continue;
+
+          const foundSession = userSessions.get(found.socketId);
+          if (!foundSession) continue;
+
+          // Mode guard — emitMatchedPair also checks, but be explicit here.
+          if (normalizeMode(foundSession.mode) !== scanMode) {
+            logWarn('[Scanner] Mode mismatch after claim — discarding:', found.socketId, normalizeMode(foundSession.mode), '!==', scanMode);
+            continue;
+          }
+
+          const roomId = await emitMatchedPair(found.socketId, foundSession, socketId, session, {
+            mode: scanMode,
+          }).catch(() => null);
+
+          if (roomId) {
+            logDebug('[Scanner] Matched waiting pair:', found.socketId, '<->', socketId, 'mode:', scanMode, 'Room:', roomId);
+            queueBackground(broadcastStats(), '[Stats] Failed to broadcast after scanner match');
+            break; // One match per mode per cycle
+          }
+        }
+      }
+    } catch (e) {
+      // Never let scanner errors affect the server
+    }
+  }, 1500);
 
   // Status endpoint
   const originalListeners = httpServer.listeners('request').slice();

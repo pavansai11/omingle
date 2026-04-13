@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import GoogleAuthButton from '@/components/google-auth-button'
 import ProfileSettingsModal from '@/components/profile-settings-modal'
 import AgeGateModal from '@/components/age-gate-modal'
+import { AdsterraBanner } from '@/components/adsterra-ads'
 import { ALL_LANGUAGES } from '@/lib/languages'
 import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORDS, TURN_CREDENTIALS_ENDPOINT } from '@/lib/constants'
 import {
@@ -174,35 +175,24 @@ function loadMonetagForNextClick() {
   } catch (e) {}
 }
 
-// ── FIX: ChatMobileAdBanner starts with height 0 to eliminate the gap.
-// It expands to 52px only when the ad script actually loads.
-function ChatMobileAdBanner() {
-  const ref = useRef(null)
+// ChatNativeAdBanner — Adsterra 1:1 native/social bar (mobile + desktop).
+function ChatNativeAdBanner({ className = '' }) {
   const containerRef = useRef(null)
   const injected = useRef(false)
   useEffect(() => {
-    if (injected.current || !ref.current) return
+    if (injected.current || !containerRef.current) return
     injected.current = true
-    const opt = document.createElement('script')
-    opt.text = "window.atOptions = {'key':'136ca117e40190a371bbc86e466823b3','format':'iframe','height':50,'width':320,'params':{}};"
-    ref.current.appendChild(opt)
-    const inv = document.createElement('script')
-    inv.src = 'https://theoreticalassertshame.com/136ca117e40190a371bbc86e466823b3/invoke.js'
-    inv.async = true
-    inv.onload = () => {
-      if (containerRef.current) {
-        containerRef.current.style.height = '52px'
-      }
-    }
-    ref.current.appendChild(inv)
+    const script = document.createElement('script')
+    script.src = 'https://theoreticalassertshame.com/2d45ed9f6a976f07c6f4182a2e2b5428/invoke.js'
+    script.async = true
+    script.setAttribute('data-cfasync', 'false')
+    containerRef.current.appendChild(script)
   }, [])
   return (
-    <div
-      ref={containerRef}
-      className="sm:hidden shrink-0 w-full bg-gray-950"
-      style={{ height: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'height 0.2s' }}
-    >
-      <div ref={ref} style={{ width: 320, height: 50 }} />
+    <div className={`w-full shrink-0 ${className}`}>
+      <div ref={containerRef}>
+        <div id="container-2d45ed9f6a976f07c6f4182a2e2b5428" />
+      </div>
     </div>
   )
 }
@@ -211,6 +201,8 @@ function ChatDesktopAdBanner({ className = '' }) {
   const ref = useRef(null)
   const injected = useRef(false)
   useEffect(() => {
+    // Skip on mobile — prevents window.atOptions collision with the mobile banner
+    if (typeof window !== 'undefined' && window.innerWidth < 640) return
     if (injected.current || !ref.current) return
     injected.current = true
     const opt = document.createElement('script')
@@ -347,6 +339,7 @@ function ChatPageContent() {
   const remoteStreamRef = useRef(null)
   const localVideoRef = useRef(null)
   const remoteVideoRef = useRef(null)
+  const remoteAudioRef = useRef(null)
   const callTimerRef = useRef(null)
   const chatEndRef = useRef(null)
   const chatScrollRef = useRef(null)
@@ -649,9 +642,10 @@ function ChatPageContent() {
   }
 
   async function attachRemotePreviewStream() {
-    if (!remoteVideoRef.current || !remoteStreamRef.current || mode !== 'video') return
-    if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current
-    try { await remoteVideoRef.current.play() } catch (e) {}
+    const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
+    if (!remoteElement || !remoteStreamRef.current) return
+    if (remoteElement.srcObject !== remoteStreamRef.current) remoteElement.srcObject = remoteStreamRef.current
+    try { await remoteElement.play() } catch (e) {}
   }
 
   async function replacePeerConnectionVideoTrack(track) {
@@ -986,7 +980,12 @@ function ChatPageContent() {
 
   function handleMatched(data) {
     const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
-    if (matchedMode !== mode) {
+    // Friend connections carry an explicit mode agreed by the inviter.
+    // Applying the URL-mode guard here would silently reject the connection when
+    // the two users are on different mode pages, causing them to be re-queued for
+    // random matches instead — the exact bug reported.  Skip the check for
+    // isFriendConnection; the server already validated both sessions' modes.
+    if (matchedMode !== mode && !data?.isFriendConnection) {
       socketRef.current?.emit('next', { reason: 'mode-mismatch' })
       resetSessionUi()
       if (socketRef.current?.connected) joinQueue()
@@ -1113,10 +1112,10 @@ function ChatPageContent() {
       tracks.forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
       })
-      const vid = remoteVideoRef.current
-      if (vid) {
-        if (vid.srcObject !== remoteStream) vid.srcObject = remoteStream
-        vid.play().catch(() => {})
+      const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
+      if (remoteElement) {
+        if (remoteElement.srcObject !== remoteStream) remoteElement.srcObject = remoteStream
+        remoteElement.play().catch(() => {})
       }
     }
 
@@ -1173,6 +1172,7 @@ function ChatPageContent() {
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null
     remoteStreamRef.current = null
   }
 
@@ -1545,7 +1545,9 @@ function ChatPageContent() {
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
                 {/* ── FIX: starts at height:0, expands to 52px only when ad actually loads ── */}
-                <ChatMobileAdBanner />
+                <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60 flex justify-center items-center" style={{ height: 52 }}>
+                  <AdsterraBanner className="sm:hidden" />
+                </div>
 
                 {/*
                   ── FIX: Removed sm:p / sm:gap so no outer padding on mobile.
@@ -1679,7 +1681,9 @@ function ChatPageContent() {
             ) : (
               /* ── VOICE MODE ── */
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
-                <ChatMobileAdBanner />
+                <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60 flex justify-center items-center" style={{ height: 52 }}>
+                  <AdsterraBanner className="sm:hidden" />
+                </div>
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
                   <div className="w-20 h-20 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center">
                     <Volume2 className="w-9 h-9 text-violet-400" />
@@ -1709,13 +1713,14 @@ function ChatPageContent() {
                   </div>
                 </div>
                 <ChatDesktopAdBanner />
+                <ChatNativeAdBanner />
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
                   <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
                     onSkip={handleNext} onFilters={handleOpenFilters}
                     connectionState={hasActiveMatch ? connectionState : 'idle'} />
                 </div>
-                <audio ref={remoteVideoRef} autoPlay className="hidden" />
+                <audio ref={remoteAudioRef} autoPlay className="hidden" />
               </div>
             )}
 

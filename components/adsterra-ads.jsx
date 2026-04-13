@@ -13,7 +13,9 @@ export function AdsterraBanner({ className = '' }) {
   const injectedD = useRef(false)
   const injectedM = useRef(false)
 
+  // Only inject desktop ad on desktop viewport — prevents window.atOptions collision
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) return
     if (injectedD.current || !desktopRef.current) return
     injectedD.current = true
     const optScript = document.createElement('script')
@@ -25,7 +27,9 @@ export function AdsterraBanner({ className = '' }) {
     desktopRef.current.appendChild(invScript)
   }, [])
 
+  // Only inject mobile ad on mobile viewport — prevents window.atOptions collision
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 640) return
     if (injectedM.current || !mobileRef.current) return
     injectedM.current = true
     const optScript = document.createElement('script')
