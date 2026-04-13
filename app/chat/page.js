@@ -162,17 +162,6 @@ function ReceivedLikeToast({ message, visible }) {
   )
 }
 
-function StrangerCountryBadge({ country, likes = 0, mobile = false }) {
-  if (!country) return null
-  return (
-    <div className={`absolute left-2 sm:left-4 top-2 sm:top-4 z-10 flex items-center gap-2 rounded-lg border border-white/10 bg-gray-900/80 px-2.5 sm:px-3 py-1.5 backdrop-blur ${mobile ? 'sm:hidden' : 'hidden sm:flex'}`}>
-      <span className="text-sm">{country.countryFlag || '🌐'}</span>
-      <span className="max-w-[120px] truncate text-[11px] sm:text-xs font-medium text-white">{country.countryName || 'Unknown'}</span>
-      <span className="ml-0.5 flex items-center gap-1 text-[11px] text-emerald-300"><ThumbsUp className="h-3 w-3" /> {likes}</span>
-    </div>
-  )
-}
-
 function loadMonetagForNextClick() {
   if (typeof window === 'undefined') return
   try {
@@ -351,7 +340,6 @@ function ChatPageContent() {
   const remoteStreamRef = useRef(null)
   const localVideoRef = useRef(null)
   const remoteVideoRef = useRef(null)
-  const remoteAudioRef = useRef(null)
   const callTimerRef = useRef(null)
   const chatEndRef = useRef(null)
   const chatScrollRef = useRef(null)
@@ -654,10 +642,9 @@ function ChatPageContent() {
   }
 
   async function attachRemotePreviewStream() {
-    const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
-    if (!remoteElement || !remoteStreamRef.current) return
-    if (remoteElement.srcObject !== remoteStreamRef.current) remoteElement.srcObject = remoteStreamRef.current
-    try { await remoteElement.play() } catch (e) {}
+    if (!remoteVideoRef.current || !remoteStreamRef.current || mode !== 'video') return
+    if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) remoteVideoRef.current.srcObject = remoteStreamRef.current
+    try { await remoteVideoRef.current.play() } catch (e) {}
   }
 
   async function replacePeerConnectionVideoTrack(track) {
@@ -1135,14 +1122,16 @@ function ChatPageContent() {
     remoteStreamRef.current = remoteStream
 
     pc.ontrack = event => {
+      // Collect tracks from the stream or directly from the event
       const tracks = event.streams?.[0]?.getTracks() || [event.track]
       tracks.forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
       })
-      const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
-      if (remoteElement) {
-        if (remoteElement.srcObject !== remoteStream) remoteElement.srcObject = remoteStream
-        remoteElement.play().catch(() => {})
+      // Attach directly in the callback — don't wait for a React render cycle
+      const vid = remoteVideoRef.current
+      if (vid) {
+        if (vid.srcObject !== remoteStream) vid.srcObject = remoteStream
+        vid.play().catch(() => {})
       }
     }
 
@@ -1201,7 +1190,6 @@ function ChatPageContent() {
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null
     remoteStreamRef.current = null
   }
 
@@ -1346,14 +1334,14 @@ function ChatPageContent() {
 
   function getRemotePanelTitle() {
     if (connectionState === 'waiting') return 'Searching for a stranger...'
-    if (connectionState === 'connecting') return mode === 'video' ? 'Match found · connecting...' : 'Match found · joining voice chat...'
-    return mode === 'video' ? 'Press Start to begin searching' : 'Press Start to begin voice matching'
+    if (connectionState === 'connecting') return 'Match found · connecting...'
+    return 'Press Start to begin searching'
   }
 
   function getRemotePanelSubtitle() {
-    if (connectionState === 'waiting') return mode === 'video' ? 'You can already see yourself while we look for someone new.' : 'Stay here while we look for someone to talk to.'
-    if (connectionState === 'connecting') return mode === 'video' ? 'The stranger video will appear here as soon as the connection is ready.' : 'The stranger audio will start as soon as the connection is ready.'
-    return mode === 'video' ? 'Your preview stays visible here. The stranger will appear in this space once matched.' : 'Start voice chat to connect with a stranger.'
+    if (connectionState === 'waiting') return 'You can already see yourself while we look for someone new.'
+    if (connectionState === 'connecting') return 'The stranger video will appear here as soon as the connection is ready.'
+    return 'Your preview stays visible here. The stranger will appear in this space once matched.'
   }
 
   function openReportModal({ targetUserId = null, roomId = null, isCurrent = true } = {}) {
@@ -1575,15 +1563,13 @@ function ChatPageContent() {
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
                 <ChatMobileAdBanner />
-                <div className="flex-1 min-h-0 p-1.5 pt-0 sm:pt-1.5 flex flex-col sm:grid sm:grid-cols-2 gap-1.5 overflow-hidden">
+                <div className="flex-1 min-h-0 p-1.5 flex flex-col sm:grid sm:grid-cols-2 gap-1.5 overflow-hidden">
 
                   {/* Stranger / Remote video */}
                   <div className="relative flex-1 sm:flex-none min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
                     <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                     <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
-                    <StrangerCountryBadge country={partnerDisplayCountry} likes={partnerLikes} mobile />
-                    <StrangerCountryBadge country={partnerDisplayCountry} likes={partnerLikes} />
                     {connectionState !== 'connected' && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
                         <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
@@ -1610,8 +1596,8 @@ function ChatPageContent() {
                   </div>
 
                   {/* Self / Local video */}
-                  <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden self-video-cell" style={{ height: '42%', minHeight: 164 }}>
-                    <style dangerouslySetInnerHTML={{ __html: '@media(min-width:640px){.self-video-cell{height:auto!important;min-height:0!important}}@media(max-width:639px){.self-video-cell{flex:0 0 42%!important}}' }} />
+                  <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden self-video-cell" style={{ height: '36%', minHeight: 120 }}>
+                    <style dangerouslySetInnerHTML={{ __html: '@media(min-width:640px){.self-video-cell{height:auto!important;min-height:0!important}}' }} />
                     <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-1 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
                     {isCameraOff && (
@@ -1625,12 +1611,6 @@ function ChatPageContent() {
                     <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
                     <div className="absolute left-1.5 sm:left-2 bottom-1.5 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
                       You · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
-                    </div>
-                    <div className="absolute inset-x-0 bottom-0 z-10 border-t border-white/10 bg-gradient-to-t from-black/75 via-black/45 to-transparent px-2.5 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-8 sm:hidden">
-                      <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
-                        onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                        onSkip={handleNext} onFilters={handleOpenFilters}
-                        connectionState={hasActiveMatch ? connectionState : 'idle'} />
                     </div>
                   </div>
                 </div>
@@ -1646,16 +1626,17 @@ function ChatPageContent() {
             ) : (
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
                 <ChatMobileAdBanner />
-                <div className="relative flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
-                  <StrangerCountryBadge country={partnerDisplayCountry} likes={partnerLikes} mobile />
-                  <StrangerCountryBadge country={partnerDisplayCountry} likes={partnerLikes} />
+                <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
                   <div className="w-20 h-20 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center">
                     <Volume2 className="w-9 h-9 text-violet-400" />
                   </div>
-                  <div className="text-center">
-                    <p className="text-sm text-gray-400">Stranger</p>
-                    {partnerDisplayCountry && <p className="mt-1 text-xs text-gray-500">{partnerDisplayCountry.countryFlag} {partnerDisplayCountry.countryName}</p>}
-                  </div>
+                  {partnerDisplayCountry && (
+                    <div className="text-center">
+                      <span className="text-2xl">{partnerDisplayCountry.countryFlag}</span>
+                      <p className="text-base font-medium mt-1">{partnerDisplayCountry.countryName}</p>
+                      <p className="text-sm text-gray-500">Stranger</p>
+                    </div>
+                  )}
                   <div className="flex items-end gap-1 h-10">
                     {[1,2,3,4,5,6,7].map(i => (
                       <div key={i} className="w-1.5 bg-violet-500/60 rounded-full"
@@ -1671,7 +1652,7 @@ function ChatPageContent() {
                     onSkip={handleNext} onFilters={handleOpenFilters}
                     connectionState={hasActiveMatch ? connectionState : 'idle'} />
                 </div>
-                <audio ref={remoteAudioRef} autoPlay className="hidden" />
+                <audio ref={remoteVideoRef} autoPlay className="hidden" />
               </div>
             )}
 
@@ -1687,6 +1668,14 @@ function ChatPageContent() {
 
             {connectionNotice && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">{connectionNotice}</div>
+            )}
+
+            {partnerDisplayCountry && connectionState === 'connected' && (
+              <div className="absolute left-4 top-4 hidden sm:flex items-center gap-2 rounded-lg bg-gray-900/80 px-3 py-1.5 backdrop-blur z-10">
+                <span className="text-sm">{partnerDisplayCountry.countryFlag}</span>
+                <span className="text-xs font-medium">{partnerDisplayCountry.countryName}</span>
+                <span className="ml-1 flex items-center gap-1 text-xs text-emerald-300"><ThumbsUp className="h-3 w-3" /> {partnerLikes}</span>
+              </div>
             )}
 
             {matchedInterests.length > 0 && connectionState === 'connected' && (
@@ -1922,15 +1911,13 @@ function ChatPageContent() {
 
         {/* Mobile Control Bar */}
         <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
-          {mode !== 'video' && (
-            <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
-              onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-              onSkip={handleNext} onFilters={handleOpenFilters}
-              connectionState={hasActiveMatch ? connectionState : 'idle'} />
-          )}
+          <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
+            onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+            onSkip={handleNext} onFilters={handleOpenFilters}
+            connectionState={hasActiveMatch ? connectionState : 'idle'} />
           <button
             onClick={() => { setShowChat(!showChat); setUnreadCount(0) }}
-            className={`${showChat ? 'hidden' : 'sm:hidden absolute right-4 inline-flex h-10 min-w-[88px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500'} ${mode === 'video' ? '-top-12' : '-top-12'}`}
+            className={`${showChat ? 'hidden' : 'sm:hidden absolute right-4 -top-12 inline-flex h-10 min-w-[88px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500'}`}
           >
             <MessageSquare className="w-3.5 h-3.5" /> Chat
             {unreadCount > 0 && (
