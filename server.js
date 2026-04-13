@@ -159,6 +159,7 @@ app.prepare().then(() => {
   const ROOM_TTL_SECONDS = 2 * 60 * 60;
   const QUEUE_KEY = 'hippichat:queue:v2'; // kept for legacy compat, no longer the live queue
   const QUEUE_MEMBERS_KEY = 'hippichat:queue-members:v3';
+  const QUEUE_CLAIM_LOCK_PREFIX = 'hippichat:queue-claim:';
 
   function getQueueEntryKey(socketId) {
     return `hippichat:queue-entry:${socketId}`;
@@ -212,6 +213,25 @@ app.prepare().then(() => {
     await redis.delKey(getInviteKey(inviteId)).catch(() => null);
   }
 
+  function getQueueClaimLockKey(socketId) {
+    return `${QUEUE_CLAIM_LOCK_PREFIX}${socketId}`;
+  }
+
+  async function acquireQueueClaimLock(socketId, ttlSeconds = 5) {
+    if (!socketId) return false;
+    try {
+      const result = await redis.command('SET', [getQueueClaimLockKey(socketId), '1', 'EX', ttlSeconds, 'NX']);
+      return result === 'OK';
+    } catch {
+      return false;
+    }
+  }
+
+  async function releaseQueueClaimLock(socketId) {
+    if (!socketId) return;
+    await redis.delKey(getQueueClaimLockKey(socketId)).catch(() => null);
+  }
+
   // ─── Redis-authoritative queue — optimised for minimum round-trips ──────────
   //
   // CALL COUNT (before → after):
@@ -233,18 +253,11 @@ app.prepare().then(() => {
         joinedAt: entry.joinedAt instanceof Date ? entry.joinedAt.toISOString() : (entry.joinedAt || new Date().toISOString()),
       };
 
-      // Round 1: write own entry AND read the current member list in parallel
-      const [, members] = await Promise.all([
+      await Promise.all([
         redis.setJson(getQueueEntryKey(entry.socketId), entryData, QUEUE_TTL_SECONDS),
-        redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
+        redis.sadd(QUEUE_MEMBERS_KEY, entry.socketId),
+        redis.expire(QUEUE_MEMBERS_KEY, QUEUE_TTL_SECONDS).catch(() => 0),
       ]);
-
-      const currentMembers = Array.isArray(members) ? members : [];
-      if (!currentMembers.includes(entry.socketId)) {
-        currentMembers.push(entry.socketId);
-        // Round 2: write updated member list
-        await redis.setJson(QUEUE_MEMBERS_KEY, currentMembers, QUEUE_TTL_SECONDS);
-      }
     } catch (err) {
       logError('[Redis] Failed to add to queue:', err?.message || err);
     }
@@ -252,18 +265,11 @@ app.prepare().then(() => {
 
   async function removeFromRedisQueue(socketId) {
     try {
-      // Round 1: delete own entry AND read member list in parallel
-      const [, members] = await Promise.all([
+      await Promise.all([
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
-        redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []),
+        redis.srem(QUEUE_MEMBERS_KEY, socketId).catch(() => 0),
+        releaseQueueClaimLock(socketId),
       ]);
-
-      const currentMembers = Array.isArray(members) ? members : [];
-      const updated = currentMembers.filter((id) => id !== socketId);
-      if (updated.length !== currentMembers.length) {
-        // Round 2: write only if changed
-        await redis.setJson(QUEUE_MEMBERS_KEY, updated, QUEUE_TTL_SECONDS);
-      }
     } catch (err) {
       logError('[Redis] Failed to remove from queue:', err?.message || err);
     }
@@ -271,8 +277,7 @@ app.prepare().then(() => {
 
   async function getRedisQueueLength() {
     try {
-      const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []);
-      return Array.isArray(members) ? members.length : 0;
+      return await redis.scard(QUEUE_MEMBERS_KEY).catch(() => 0);
     } catch {
       return 0;
     }
@@ -282,7 +287,7 @@ app.prepare().then(() => {
     const normalizedInterests = normalizeInterestKeywords(interests);
 
     // Round 1: single read of the member list
-    const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []);
+    const members = await redis.smembers(QUEUE_MEMBERS_KEY).catch(() => []);
     const currentMembers = Array.isArray(members) ? members : [];
 
     const candidateIds = currentMembers.filter(
@@ -319,24 +324,43 @@ app.prepare().then(() => {
     if (matchingInProgress.has(selected.socketId) || matchingInProgress.has(socketId)) {
       return null;
     }
+
+    const [sourceLocked, targetLocked] = await Promise.all([
+      acquireQueueClaimLock(socketId),
+      acquireQueueClaimLock(selected.socketId),
+    ]);
+    if (!sourceLocked || !targetLocked) {
+      if (sourceLocked) await releaseQueueClaimLock(socketId);
+      if (targetLocked) await releaseQueueClaimLock(selected.socketId);
+      return null;
+    }
+
     matchingInProgress.add(selected.socketId);
     matchingInProgress.add(socketId);
 
     try {
-      // Round 3: delete both entries AND write the pruned member list IN PARALLEL
-      const updatedMembers = currentMembers.filter(
-        (id) => id !== selected.socketId && id !== socketId
-      );
+      const [selectedEntry, requesterEntry] = await Promise.all([
+        redis.getJson(getQueueEntryKey(selected.socketId)).catch(() => null),
+        redis.getJson(getQueueEntryKey(socketId)).catch(() => null),
+      ]);
+
+      if (!selectedEntry || !requesterEntry) return null;
+      if (selectedEntry.mode !== mode || requesterEntry.mode !== mode) return null;
+
       await Promise.all([
         redis.delKey(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
-        redis.setJson(QUEUE_MEMBERS_KEY, updatedMembers, QUEUE_TTL_SECONDS),
+        redis.srem(QUEUE_MEMBERS_KEY, selected.socketId, socketId).catch(() => 0),
       ]);
 
       return selected;
     } finally {
       matchingInProgress.delete(selected.socketId);
       matchingInProgress.delete(socketId);
+      await Promise.all([
+        releaseQueueClaimLock(socketId),
+        releaseQueueClaimLock(selected.socketId),
+      ]);
     }
   }
   // ──────────────────────────────────────────────────────────────────────────
@@ -397,7 +421,7 @@ app.prepare().then(() => {
     // Prune stale Redis queue entries (sockets no longer connected)
     // We do this async but fire-and-forget; failures are non-critical
     queueBackground((async () => {
-      const members = await redis.getJson(QUEUE_MEMBERS_KEY).catch(() => []) || [];
+      const members = await redis.smembers(QUEUE_MEMBERS_KEY).catch(() => []) || [];
       const validMembers = [];
       for (const socketId of members) {
         if (activeSocketIds.has(socketId)) {
@@ -415,7 +439,13 @@ app.prepare().then(() => {
         await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
       }
       if (validMembers.length !== members.length) {
-        await redis.setJson(QUEUE_MEMBERS_KEY, validMembers, QUEUE_TTL_SECONDS);
+        const staleMembers = members.filter((socketId) => !validMembers.includes(socketId));
+        if (staleMembers.length) {
+          await redis.srem(QUEUE_MEMBERS_KEY, ...staleMembers).catch(() => 0);
+        }
+        if (validMembers.length) {
+          await redis.expire(QUEUE_MEMBERS_KEY, QUEUE_TTL_SECONDS).catch(() => 0);
+        }
       }
     })(), '[Runtime] Failed to prune Redis queue');
 
@@ -947,6 +977,8 @@ app.prepare().then(() => {
   }
 
   async function removeFromQueue(socketId) {
+    const session = userSessions.get(socketId);
+    if (session) session.inQueue = false;
     await removeFromRedisQueue(socketId);
   }
 
@@ -1059,6 +1091,7 @@ app.prepare().then(() => {
       userSessions.set(socket.id, session);
       const identityId = getIdentityId(session);
       session.country = resolveCountryPayload(session.country, userProfiles.get(identityId));
+      session.inQueue = true;
       userSessions.set(socket.id, session);
 
       // moderationBlock was already fetched in parallel with leaveRoom/removeFromQueue above
