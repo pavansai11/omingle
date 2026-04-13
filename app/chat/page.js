@@ -174,8 +174,11 @@ function loadMonetagForNextClick() {
   } catch (e) {}
 }
 
+// ── FIX: ChatMobileAdBanner starts with height 0 to eliminate the gap.
+// It expands to 52px only when the ad script actually loads.
 function ChatMobileAdBanner() {
   const ref = useRef(null)
+  const containerRef = useRef(null)
   const injected = useRef(false)
   useEffect(() => {
     if (injected.current || !ref.current) return
@@ -186,11 +189,19 @@ function ChatMobileAdBanner() {
     const inv = document.createElement('script')
     inv.src = 'https://theoreticalassertshame.com/136ca117e40190a371bbc86e466823b3/invoke.js'
     inv.async = true
+    inv.onload = () => {
+      if (containerRef.current) {
+        containerRef.current.style.height = '52px'
+      }
+    }
     ref.current.appendChild(inv)
   }, [])
   return (
-    <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60"
-      style={{ height: 52, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div
+      ref={containerRef}
+      className="sm:hidden shrink-0 w-full bg-gray-950"
+      style={{ height: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'height 0.2s' }}
+    >
       <div ref={ref} style={{ width: 320, height: 50 }} />
     </div>
   )
@@ -218,8 +229,6 @@ function ChatDesktopAdBanner({ className = '' }) {
 }
 
 // ─── VP8 codec preference ─────────────────────────────────────────────────────
-// Reorders the m=video codec list so VP8 is first.  VP8 has lower first-frame
-// decode latency than VP9/H264 on most hardware — especially important on mobile.
 function preferVP8(sdp) {
   return sdp.replace(/(m=video \d+ \S+)([\d ]+)/g, (match, prefix, codecs) => {
     const list = codecs.trim().split(' ')
@@ -332,9 +341,7 @@ function ChatPageContent() {
 
   const socketRef = useRef(null)
   const pcRef = useRef(null)
-  // ── CHANGE 1: pre-warmed peer connection ref ──────────────────────────────
   const preWarmedPcRef = useRef(null)
-  // ─────────────────────────────────────────────────────────────────────────
   const localStreamRef = useRef(null)
   const rawLocalStreamRef = useRef(null)
   const remoteStreamRef = useRef(null)
@@ -934,13 +941,7 @@ function ChatPageContent() {
     }
   }, [connectionState])
 
-  // ── CHANGE 2: pre-warm RTCPeerConnection ──────────────────────────────────
-  // Called every time we join the queue.  The browser starts ICE candidate
-  // gathering immediately with local tracks already attached, so by the time
-  // a match is found the candidates are ready and the offer can be sent
-  // in ~50 ms instead of waiting 600–1400 ms for STUN/TURN probing.
   function preWarmPeerConnection() {
-    // Discard any previous pre-warm PC that wasn't consumed
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
@@ -952,7 +953,7 @@ function ChatPageContent() {
         ...baseConfig,
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 10,   // pre-gather candidates while waiting
+        iceCandidatePoolSize: 10,
       })
       localStreamRef.current.getTracks().forEach(t => {
         try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
@@ -960,16 +961,11 @@ function ChatPageContent() {
       preWarmedPcRef.current = pc
     } catch (_) {}
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
-  // ── CHANGE 3: modified joinQueue calls preWarmPeerConnection ─────────────
   function joinQueue() {
     if (!socketRef.current?.connected) return
     if (!sessionUser?.id) { router.replace('/'); return }
-
-    // Start ICE candidate gathering NOW, before a match is found
     if (isMediaReady) preWarmPeerConnection()
-
     setConnectionState('waiting')
     setMessages([])
     setPartnerCaption(null)
@@ -987,7 +983,6 @@ function ChatPageContent() {
       country: selfCountry,
     })
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handleMatched(data) {
     const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
@@ -1035,7 +1030,6 @@ function ChatPageContent() {
     initPeerConnection(data.isInitiator, data.partnerId)
   }
 
-  // ── CHANGE 4: modified handleSignal applies VP8 preference on answer ──────
   async function handleSignal(data) {
     const pc = pcRef.current
     try {
@@ -1047,7 +1041,6 @@ function ChatPageContent() {
         const queuedForOffer = iceCandidateQueue.current.splice(0)
         await Promise.all(queuedForOffer.map(c => currentPc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
         const answer = await currentPc.createAnswer()
-        // Apply VP8 preference on the answerer side too
         const optimisedSdp = preferVP8(answer.sdp)
         await currentPc.setLocalDescription({ type: answer.type, sdp: optimisedSdp })
         socketRef.current?.emit('signal', { type: 'answer', to: data.from, payload: currentPc.localDescription })
@@ -1061,7 +1054,6 @@ function ChatPageContent() {
       }
     } catch (err) {}
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handlePartnerLeft() {
     const shouldKeepSearching = pendingStartRef.current
@@ -1081,11 +1073,8 @@ function ChatPageContent() {
     if (!showChat) setUnreadCount(c => c + 1)
   }
 
-  // ── CHANGE 5: initPeerConnection reuses pre-warmed PC ─────────────────────
   function initPeerConnection(isInitiator, peerId) {
     cleanupPeerConnection()
-
-    // Reuse the pre-warmed PC if it is still usable (candidates already gathered)
     const prewarm = preWarmedPcRef.current
     let pc
     if (
@@ -1097,7 +1086,6 @@ function ChatPageContent() {
       pc = prewarm
       preWarmedPcRef.current = null
     } else {
-      // Pre-warm was not available (e.g. friend connect, or media not ready earlier)
       if (prewarm) {
         try { prewarm.close() } catch (_) {}
         preWarmedPcRef.current = null
@@ -1117,17 +1105,14 @@ function ChatPageContent() {
     }
 
     pcRef.current = pc
-
     const remoteStream = new MediaStream()
     remoteStreamRef.current = remoteStream
 
     pc.ontrack = event => {
-      // Collect tracks from the stream or directly from the event
       const tracks = event.streams?.[0]?.getTracks() || [event.track]
       tracks.forEach(t => {
         if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
       })
-      // Attach directly in the callback — don't wait for a React render cycle
       const vid = remoteVideoRef.current
       if (vid) {
         if (vid.srcObject !== remoteStream) vid.srcObject = remoteStream
@@ -1177,7 +1162,6 @@ function ChatPageContent() {
             offerToReceiveVideo: mode === 'video',
           })
           if (pc.signalingState !== 'stable') return
-          // Apply VP8 codec preference for faster first-frame decode
           const optimisedSdp = preferVP8(offer.sdp)
           await pc.setLocalDescription({ type: offer.type, sdp: optimisedSdp })
           socketRef.current?.emit('signal', { type: 'offer', to: peerId, payload: pc.localDescription })
@@ -1185,7 +1169,6 @@ function ChatPageContent() {
       })()
     }
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function cleanupPeerConnection() {
     if (pcRef.current) { pcRef.current.close(); pcRef.current = null }
@@ -1193,9 +1176,7 @@ function ChatPageContent() {
     remoteStreamRef.current = null
   }
 
-  // ── CHANGE 6: resetSessionUi cleans up pre-warmed PC ─────────────────────
   function resetSessionUi({ clearMessages = true } = {}) {
-    // Discard any unconsumed pre-warmed PC to avoid resource leaks
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
@@ -1211,7 +1192,6 @@ function ChatPageContent() {
     if (clearMessages) setMessages([])
     setReceivedLikeToast({ visible: false, message: '' })
   }
-  // ─────────────────────────────────────────────────────────────────────────
 
   function handleStartSearch() {
     if (!sessionUser?.id) { router.replace('/'); return }
@@ -1260,7 +1240,6 @@ function ChatPageContent() {
     pendingStartRef.current = false
     updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
     socketRef.current?.emit('next', { reason: 'end' })
-    // Clean up pre-warmed PC before navigating away
     if (preWarmedPcRef.current) {
       try { preWarmedPcRef.current.close() } catch (_) {}
       preWarmedPcRef.current = null
@@ -1375,6 +1354,9 @@ function ChatPageContent() {
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
   const currentPartnerHasIncomingRequest = partnerUserId ? incomingRequestIds.has(partnerUserId) : false
+
+  // ── Whether to hide the sticky mobile bar (controls are overlaid on self-view in video mode)
+  const hideMobileBar = mode === 'video' && !showChat && !showMobileCenterPane
 
   if (!sessionResolved) return <ChatPageFallback />
   if (!sessionUser) return null
@@ -1562,14 +1544,58 @@ function ChatPageContent() {
           `}>
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+                {/* ── FIX: starts at height:0, expands to 52px only when ad actually loads ── */}
                 <ChatMobileAdBanner />
-                <div className="flex-1 min-h-0 p-1.5 flex flex-col sm:grid sm:grid-cols-2 gap-1.5 overflow-hidden">
 
-                  {/* Stranger / Remote video */}
-                  <div className="relative flex-1 sm:flex-none min-h-0 rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden">
+                {/*
+                  ── FIX: Removed sm:p / sm:gap so no outer padding on mobile.
+                  Videos are edge-to-edge on mobile for a full-screen feel.
+                  On mobile: flex-col with proportional heights.
+                  On desktop: grid 2-col with padding and gap.
+                ──*/}
+                <div className="flex-1 min-h-0 sm:p-1.5 flex flex-col sm:grid sm:grid-cols-2 sm:gap-1.5 overflow-hidden">
+
+                  {/* ── Stranger / Remote video ── */}
+                  <div className="relative flex-[3] sm:flex-none min-h-0 sm:rounded-xl overflow-hidden bg-black">
                     <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+
+                    {/* Watermark */}
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
+
                     <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
+
+                    {/* ── FIX: Partner country badge — now INSIDE the remote video div,
+                        visible on BOTH mobile and desktop. Shows as soon as we're
+                        connecting or connected (so it persists throughout the call). ── */}
+                    {(connectionState === 'connected' || connectionState === 'connecting') &&
+                      partnerDisplayCountry?.countryFlag && (
+                      <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-lg bg-gray-900/75 px-2 py-1 backdrop-blur-sm border border-white/10">
+                        <span className="text-base leading-none">{partnerDisplayCountry.countryFlag}</span>
+                        {partnerDisplayCountry.countryName && partnerDisplayCountry.countryName !== 'Unknown' && (
+                          <span className="text-xs font-medium text-white">{partnerDisplayCountry.countryName}</span>
+                        )}
+                        {connectionState === 'connected' && (
+                          <span className="flex items-center gap-0.5 text-[11px] text-emerald-300 ml-0.5">
+                            <ThumbsUp className="h-2.5 w-2.5" />
+                            {partnerLikes}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ── Chat toggle button floating on remote video (mobile, video mode) ── */}
+                    <button
+                      onClick={() => { setShowChat(true); setUnreadCount(0) }}
+                      className="sm:hidden absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-gray-900/75 border border-white/10 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      Chat
+                      {unreadCount > 0 && (
+                        <span className="ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold">{unreadCount}</span>
+                      )}
+                    </button>
+
+                    {/* Not-connected overlay */}
                     {connectionState !== 'connected' && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
                         <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
@@ -1585,6 +1611,8 @@ function ChatPageContent() {
                         )}
                       </div>
                     )}
+
+                    {/* Like button */}
                     {connectionState === 'connected' && (
                       <button onClick={handleLikePartner} disabled={hasLikedPartner}
                         className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg transition-all backdrop-blur border
@@ -1595,11 +1623,17 @@ function ChatPageContent() {
                     )}
                   </div>
 
-                  {/* Self / Local video */}
-                  <div className="relative rounded-xl border border-gray-800 bg-gray-900/60 overflow-hidden self-video-cell" style={{ height: '36%', minHeight: 120 }}>
-                    <style dangerouslySetInnerHTML={{ __html: '@media(min-width:640px){.self-video-cell{height:auto!important;min-height:0!important}}' }} />
+                  {/* ── Self / Local video ──
+                      FIX: On mobile this is flex-[2] so it fills the remaining space
+                      all the way to the bottom of the screen (no sticky bar below it).
+                      The Start / Skip / Filters controls are overlaid at the bottom of
+                      this panel via an absolutely-positioned gradient strip. ── */}
+                  <div className="relative flex-[2] sm:flex-none sm:rounded-xl overflow-hidden bg-black">
                     <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
-                    <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-1 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
+
+                    {/* Watermark */}
+                    <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-14 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
+
                     {isCameraOff && (
                       <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
                         <VideoOff className="w-4 sm:w-5 h-4 sm:h-5 text-gray-500" />
@@ -1608,14 +1642,33 @@ function ChatPageContent() {
                     {!localStreamRef.current && (
                       <div className="absolute inset-0 bg-gray-900/90 hidden sm:flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
                     )}
+
                     <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
-                    <div className="absolute left-1.5 sm:left-2 bottom-1.5 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
+
+                    {/* "You" label — pushed up on mobile to stay above controls */}
+                    <div className="absolute left-1.5 sm:left-2 bottom-14 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
                       You · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
+                    </div>
+
+                    {/* ── FIX: Mobile-only control overlay at bottom of self-view ──
+                        This replaces the sticky bottom bar on mobile in video mode.
+                        The gradient blends into the video so it feels native. ── */}
+                    <div className="sm:hidden absolute bottom-0 left-0 right-0 z-20 px-2 pt-6 pb-2 bg-gradient-to-t from-gray-950/80 via-gray-950/40 to-transparent">
+                      <ControlButtons
+                        primaryActionIsStop={primaryActionIsStop}
+                        isMediaReady={isMediaReady}
+                        onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+                        onSkip={handleNext}
+                        onFilters={handleOpenFilters}
+                        connectionState={hasActiveMatch ? connectionState : 'idle'}
+                      />
                     </div>
                   </div>
                 </div>
 
                 <ChatDesktopAdBanner />
+
+                {/* Desktop control bar */}
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
                   <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
@@ -1624,17 +1677,27 @@ function ChatPageContent() {
                 </div>
               </div>
             ) : (
+              /* ── VOICE MODE ── */
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
                 <ChatMobileAdBanner />
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-3">
                   <div className="w-20 h-20 rounded-full bg-violet-600/20 border-2 border-violet-500/30 flex items-center justify-center">
                     <Volume2 className="w-9 h-9 text-violet-400" />
                   </div>
-                  {partnerDisplayCountry && (
+                  {partnerDisplayCountry && (connectionState === 'connected' || connectionState === 'connecting') && (
                     <div className="text-center">
                       <span className="text-2xl">{partnerDisplayCountry.countryFlag}</span>
-                      <p className="text-base font-medium mt-1">{partnerDisplayCountry.countryName}</p>
+                      {partnerDisplayCountry.countryName && partnerDisplayCountry.countryName !== 'Unknown' && (
+                        <p className="text-base font-medium mt-1">{partnerDisplayCountry.countryName}</p>
+                      )}
                       <p className="text-sm text-gray-500">Stranger</p>
+                    </div>
+                  )}
+                  {(connectionState === 'waiting') && (
+                    <div className="text-center">
+                      <Loader2 className="w-8 h-8 text-violet-400 animate-spin mx-auto mb-2" />
+                      <p className="text-sm text-gray-400">Searching for a voice chat partner…</p>
+                      <p className="text-xs text-gray-600 mt-1">Voice chat may take longer to match — please wait</p>
                     </div>
                   )}
                   <div className="flex items-end gap-1 h-10">
@@ -1660,8 +1723,10 @@ function ChatPageContent() {
               <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-sm flex items-center justify-center z-20">
                 <div className="text-center">
                   <Loader2 className="w-10 h-10 text-violet-400 animate-spin mx-auto mb-3" />
-                  <p className="text-lg font-medium">Connecting...</p>
-                  {partnerDisplayCountry && <p className="text-sm text-gray-400 mt-1">{partnerDisplayCountry.countryFlag} {partnerDisplayCountry.countryName}</p>}
+                  <p className="text-lg font-medium">Connecting…</p>
+                  {partnerDisplayCountry && partnerDisplayCountry.countryName !== 'Unknown' && (
+                    <p className="text-sm text-gray-400 mt-1">{partnerDisplayCountry.countryFlag} {partnerDisplayCountry.countryName}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -1670,16 +1735,9 @@ function ChatPageContent() {
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">{connectionNotice}</div>
             )}
 
-            {partnerDisplayCountry && connectionState === 'connected' && (
-              <div className="absolute left-4 top-4 hidden sm:flex items-center gap-2 rounded-lg bg-gray-900/80 px-3 py-1.5 backdrop-blur z-10">
-                <span className="text-sm">{partnerDisplayCountry.countryFlag}</span>
-                <span className="text-xs font-medium">{partnerDisplayCountry.countryName}</span>
-                <span className="ml-1 flex items-center gap-1 text-xs text-emerald-300"><ThumbsUp className="h-3 w-3" /> {partnerLikes}</span>
-              </div>
-            )}
-
+            {/* ── Matched-interests badge (desktop only) ── */}
             {matchedInterests.length > 0 && connectionState === 'connected' && (
-              <div className={`absolute top-28 left-4 z-10 flex flex-wrap gap-2 max-w-[70%] transition-opacity duration-500 ${matchedInterestsVisible ? 'opacity-100' : 'opacity-0'}`}>
+              <div className={`absolute top-28 left-4 z-10 hidden sm:flex flex-wrap gap-2 max-w-[70%] transition-opacity duration-500 ${matchedInterestsVisible ? 'opacity-100' : 'opacity-0'}`}>
                 {matchedInterests.map(interest => (
                   <span key={interest} className="rounded-full border border-violet-400/20 bg-violet-500/15 px-2.5 py-1 text-[11px] text-violet-100 backdrop-blur">#{interest}</span>
                 ))}
@@ -1909,22 +1967,19 @@ function ChatPageContent() {
           </div>
         </div>
 
-        {/* Mobile Control Bar */}
-        <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
-          <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
-            onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-            onSkip={handleNext} onFilters={handleOpenFilters}
-            connectionState={hasActiveMatch ? connectionState : 'idle'} />
-          <button
-            onClick={() => { setShowChat(!showChat); setUnreadCount(0) }}
-            className={`${showChat ? 'hidden' : 'sm:hidden absolute right-4 -top-12 inline-flex h-10 min-w-[88px] items-center justify-center gap-1 rounded-full bg-violet-600 px-3 text-xs font-semibold text-white shadow-lg shadow-black/30 hover:bg-violet-500'}`}
-          >
-            <MessageSquare className="w-3.5 h-3.5" /> Chat
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 bg-black/80 rounded-full text-[10px] flex items-center justify-center font-bold">{unreadCount}</span>
-            )}
-          </button>
-        </div>
+        {/*
+          ── FIX: Mobile sticky bar ──
+          Hidden in video mode (controls are overlaid on self-view instead).
+          Still visible in voice mode and when chat/panel is open on mobile.
+        ──*/}
+        {!hideMobileBar && (
+          <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
+            <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
+              onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
+              onSkip={handleNext} onFilters={handleOpenFilters}
+              connectionState={hasActiveMatch ? connectionState : 'idle'} />
+          </div>
+        )}
       </div>
     </div>
   )
