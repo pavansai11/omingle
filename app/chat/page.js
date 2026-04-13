@@ -1558,8 +1558,8 @@ function ChatPageContent() {
                 <div className="flex-1 min-h-0 sm:p-1.5 flex flex-col sm:grid sm:grid-cols-2 sm:gap-1.5 overflow-hidden">
 
                   {/* ── Stranger / Remote video ── */}
-                  <div className="relative flex-[3] sm:flex-none min-h-0 sm:rounded-xl overflow-hidden bg-black">
-                    <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+                  <div className="relative flex-1 sm:flex-[3] sm:flex-none min-h-0 sm:rounded-xl overflow-hidden bg-black">
+                    <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-contain sm:object-cover bg-black" />
 
                     {/* Watermark */}
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
@@ -1630,8 +1630,8 @@ function ChatPageContent() {
                       all the way to the bottom of the screen (no sticky bar below it).
                       The Start / Skip / Filters controls are overlaid at the bottom of
                       this panel via an absolutely-positioned gradient strip. ── */}
-                  <div className="relative flex-[2] sm:flex-none sm:rounded-xl overflow-hidden bg-black">
-                    <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
+                  <div className="relative flex-1 sm:flex-[2] sm:flex-none sm:rounded-xl overflow-hidden bg-black">
+                    <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-contain sm:object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
 
                     {/* Watermark */}
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-14 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
