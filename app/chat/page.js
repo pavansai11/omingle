@@ -11,7 +11,7 @@ import { buildRtcConfig, MAX_CHAT_MESSAGES, LANGUAGE_FACTS, MAX_INTEREST_KEYWORD
 import {
   Mic, MicOff, Video, VideoOff, SkipForward, Phone, Flag, Captions, UserPlus,
   Send, MessageSquare, X, Loader2, Globe, Volume2, Users, Play, Square, SlidersHorizontal,
-  AlertTriangle, ThumbsUp, Heart
+  AlertTriangle, ThumbsUp, Heart, Lock, UserX, LogIn
 } from 'lucide-react'
 
 const FACE_CHECK_INTERVAL_MS = 5000
@@ -53,7 +53,7 @@ function countryFromCode(regionCode) {
   try {
     const displayNames = new Intl.DisplayNames(['en'], { type: 'region' })
     countryName = displayNames.of(upper) || upper
-  } catch (e) {}
+  } catch {}
   return { countryCode: upper, countryName, countryFlag: regionCodeToFlag(upper) }
 }
 
@@ -163,6 +163,93 @@ function ReceivedLikeToast({ message, visible }) {
   )
 }
 
+// ── Guest gate overlay — real data is NEVER sent to guest clients.
+// The blurred content is static placeholder only; even if the overlay CSS is
+// removed via DevTools, there is nothing real underneath.
+function GuestPanelGate({ feature, onSignIn }) {
+  return (
+    <div
+      className="flex flex-col min-h-0 h-full overflow-hidden"
+      style={{ position: 'relative' }}
+    >
+      {/* Static placeholder — no real data, just visual noise */}
+      <div
+        style={{
+          filter: 'blur(7px)',
+          userSelect: 'none',
+          pointerEvents: 'none',
+          opacity: 0.45,
+        }}
+        aria-hidden="true"
+      >
+        {[1, 2, 3].map(i => (
+          <div key={i} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3 mb-2 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gray-700 shrink-0" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-2.5 bg-gray-700 rounded w-24" />
+              <div className="h-2 bg-gray-700/70 rounded w-16" />
+            </div>
+          </div>
+        ))}
+        {[1, 2].map(i => (
+          <div key={i + 10} className="rounded-xl border border-gray-800 bg-gray-800/30 px-3 py-3 mb-2 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gray-700/60 shrink-0" />
+            <div className="flex-1 space-y-1.5">
+              <div className="h-2.5 bg-gray-700/60 rounded w-20" />
+              <div className="h-2 bg-gray-700/40 rounded w-14" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Protective overlay — inline styles so DevTools class removal won't work */}
+      <div
+        onContextMenu={e => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: 50,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px 16px',
+          background: 'rgba(9, 9, 11, 0.88)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          userSelect: 'none',
+          cursor: 'default',
+        }}
+      >
+        <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }}>
+          <Lock style={{ width: 20, height: 20, color: '#a78bfa' }} />
+        </div>
+        <p style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 6, textAlign: 'center' }}>
+          Sign in to view {feature}
+        </p>
+        <p style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginBottom: 16, maxWidth: 200 }}>
+          Guests can't access {feature}. Create a free account to unlock the full experience.
+        </p>
+        <button
+          onClick={onSignIn}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#7c3aed', color: '#fff',
+            border: 'none', borderRadius: 10, padding: '8px 18px',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+          }}
+        >
+          <LogIn style={{ width: 14, height: 14 }} />
+          Sign in with Google
+        </button>
+        <p style={{ fontSize: 11, color: '#374151', marginTop: 10 }}>
+          Guests get: video chat, voice chat, text chat
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function loadMonetagForNextClick() {
   if (typeof window === 'undefined') return
   try {
@@ -172,10 +259,9 @@ function loadMonetagForNextClick() {
     s.id = 'monetag-onclick-pop'
     s.textContent = "(function(s){s.dataset.zone='10809114',s.src='https://al5sm.com/tag.min.js'})([document.documentElement,document.body].filter(Boolean).pop().appendChild(document.createElement('script')))"
     document.head.appendChild(s)
-  } catch (e) {}
+  } catch {}
 }
 
-// ChatNativeAdBanner — Adsterra 1:1 native/social bar (mobile + desktop).
 function ChatNativeAdBanner({ className = '' }) {
   const containerRef = useRef(null)
   const injected = useRef(false)
@@ -201,7 +287,6 @@ function ChatDesktopAdBanner({ className = '' }) {
   const ref = useRef(null)
   const injected = useRef(false)
   useEffect(() => {
-    // Skip on mobile — prevents window.atOptions collision with the mobile banner
     if (typeof window !== 'undefined' && window.innerWidth < 640) return
     if (injected.current || !ref.current) return
     injected.current = true
@@ -220,7 +305,6 @@ function ChatDesktopAdBanner({ className = '' }) {
   )
 }
 
-// ─── VP8 codec preference ─────────────────────────────────────────────────────
 function preferVP8(sdp) {
   return sdp.replace(/(m=video \d+ \S+)([\d ]+)/g, (match, prefix, codecs) => {
     const list = codecs.trim().split(' ')
@@ -296,6 +380,7 @@ function ChatPageContent() {
   const [connectionNotice, setConnectionNotice] = useState('')
   const [mediaWarning, setMediaWarning] = useState(null)
   const [skipCount, setSkipCount] = useState(0)
+  const [showSignInGate, setShowSignInGate] = useState(false)
 
   const [faceWarningVisible, setFaceWarningVisible] = useState(false)
   const [faceCountdown, setFaceCountdown] = useState(10)
@@ -309,6 +394,10 @@ function ChatPageContent() {
 
   const [receivedLikeToast, setReceivedLikeToast] = useState({ visible: false, message: '' })
   const receivedLikeTimerRef = useRef(null)
+
+  // Derived: whether the current session is a guest
+  const isGuest = !!(sessionUser?.isGuest)
+  const isFullUser = !!sessionUser && !isGuest
 
   const partnerDisplayCountry = useMemo(() => {
     if (partnerCountry) return partnerCountry
@@ -359,7 +448,6 @@ function ChatPageContent() {
   const countrySyncRef = useRef(false)
   const matchedInterestsTimeoutRef = useRef(null)
   const matchedInterestsHideTimeoutRef = useRef(null)
-  const recognitionRef = useRef(null)
 
   useEffect(() => { partnerIdRef.current = partnerId }, [partnerId])
   useEffect(() => { partnerLanguageRef.current = partnerLanguage }, [partnerLanguage])
@@ -385,8 +473,7 @@ function ChatPageContent() {
       await window.faceapi.nets.tinyFaceDetector.loadFromUri(FACEAPI_MODELS)
       faceApiLoadedRef.current = true
       return true
-    } catch (e) {
-      console.warn('[FaceDetection] Could not load model:', e)
+    } catch {
       return false
     }
   }
@@ -443,7 +530,7 @@ function ChatPageContent() {
             }, NO_FACE_TIMEOUT_MS)
           }
         }
-      } catch (e) {}
+      } catch {}
     }, FACE_CHECK_INTERVAL_MS)
   }
 
@@ -460,7 +547,7 @@ function ChatPageContent() {
     if (connectionState === 'connected' && mode === 'video') startFaceDetection()
     else stopFaceDetection()
     return stopFaceDetection
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionState, mode])
 
   function maybeShowAdOnSkip(nextSkipCount) {
@@ -468,6 +555,8 @@ function ChatPageContent() {
   }
 
   function showReceivedLike(senderName) {
+    // Guests don't receive like notifications
+    if (isGuest) return
     const message = senderName ? `${senderName} liked you!` : 'Someone liked you!'
     setReceivedLikeToast({ visible: true, message })
     if (receivedLikeTimerRef.current) clearTimeout(receivedLikeTimerRef.current)
@@ -496,27 +585,49 @@ function ChatPageContent() {
       anonUserIdRef.current = anonId
       const savedSkips = localStorage.getItem('hippichat_skip_count')
       if (savedSkips) setSkipCount(parseInt(savedSkips, 10) || 0)
-    } catch (e) {
+    } catch {
       anonUserIdRef.current = `anon_fallback_${generateId()}`
     }
   }, [])
 
   useEffect(() => {
-    try { localStorage.setItem('hippichat_interest_keywords', JSON.stringify(interestKeywords)) } catch (e) {}
+    try { localStorage.setItem('hippichat_interest_keywords', JSON.stringify(interestKeywords)) } catch {}
   }, [interestKeywords])
 
   useEffect(() => {
-    try { localStorage.setItem('hippichat_skip_count', String(skipCount)) } catch (e) {}
+    try { localStorage.setItem('hippichat_skip_count', String(skipCount)) } catch {}
   }, [skipCount])
 
+  // Session loading — tries Google auth first, falls back to guest session
   useEffect(() => {
     let cancelled = false
     async function loadSession() {
       try {
         const res = await fetch('/api/auth/session', { cache: 'no-store' })
         const data = await res.json()
-        if (!cancelled) { setSessionUser(data?.user || null); setSessionResolved(true) }
-      } catch (e) {
+        if (!cancelled && data?.user) {
+          setSessionUser({ ...data.user, isGuest: false })
+          setSessionResolved(true)
+          return
+        }
+        // Fall back to guest session
+        const guestRes = await fetch('/api/auth/guest', { cache: 'no-store' })
+        const guestData = await guestRes.json()
+        if (!cancelled) {
+          if (guestData?.guestId) {
+            setSessionUser({
+              id: guestData.guestId,
+              isGuest: true,
+              name: 'Guest',
+              image: null,
+              email: null,
+            })
+          } else {
+            setSessionUser(null)
+          }
+          setSessionResolved(true)
+        }
+      } catch {
         if (!cancelled) { setSessionUser(null); setSessionResolved(true) }
       }
     }
@@ -524,6 +635,7 @@ function ChatPageContent() {
     return () => { cancelled = true }
   }, [])
 
+  // Redirect only if there's truly no session (not even a guest cookie)
   useEffect(() => {
     if (!sessionResolved) return
     if (sessionUser) return
@@ -538,7 +650,7 @@ function ChatPageContent() {
         const data = await res.json()
         const iceServers = Array.isArray(data?.iceServers) ? data.iceServers.filter(s => s && (Array.isArray(s.urls) || typeof s.urls === 'string')) : []
         if (!cancelled) setTurnIceServers(res.ok ? iceServers : [])
-      } catch (error) {
+      } catch {
         if (!cancelled) setTurnIceServers([])
       }
     }
@@ -546,8 +658,9 @@ function ChatPageContent() {
     return () => { cancelled = true }
   }, [sessionUser?.id])
 
+  // Country sync — only for full (non-guest) users
   useEffect(() => {
-    if (!sessionUser?.id) return
+    if (!sessionUser?.id || isGuest) return
     if (!selfCountry?.countryName || selfCountry.countryName === 'Unknown') return
     if (countrySyncRef.current) return
     if (sessionUser?.countryCode === selfCountry.countryCode && sessionUser?.countryName === selfCountry.countryName) return
@@ -556,8 +669,8 @@ function ChatPageContent() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ countryCode: selfCountry.countryCode, countryName: selfCountry.countryName, countryFlag: selfCountry.countryFlag }),
-    }).then(r => r.json()).then(data => { if (data?.user) setSessionUser(data.user) }).catch(() => {}).finally(() => { countrySyncRef.current = false })
-  }, [selfCountry, sessionUser])
+    }).then(r => r.json()).then(data => { if (data?.user) setSessionUser(prev => ({ ...prev, ...data.user })) }).catch(() => {}).finally(() => { countrySyncRef.current = false })
+  }, [selfCountry, sessionUser, isGuest])
 
   useEffect(() => {
     if (sessionUser?.countryName || sessionUser?.countryFlag) {
@@ -638,21 +751,21 @@ function ChatPageContent() {
     if (localVideoRef.current.srcObject !== stream) localVideoRef.current.srcObject = stream
     localVideoRef.current.muted = true
     localVideoRef.current.playsInline = true
-    try { await localVideoRef.current.play() } catch (e) {}
+    try { await localVideoRef.current.play() } catch {}
   }
 
   async function attachRemotePreviewStream() {
     const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
     if (!remoteElement || !remoteStreamRef.current) return
     if (remoteElement.srcObject !== remoteStreamRef.current) remoteElement.srcObject = remoteStreamRef.current
-    try { await remoteElement.play() } catch (e) {}
+    try { await remoteElement.play() } catch {}
   }
 
   async function replacePeerConnectionVideoTrack(track) {
     if (!pcRef.current || !track) return
     const sender = pcRef.current.getSenders().find(s => s.track?.kind === 'video')
     if (!sender) return
-    try { await sender.replaceTrack(track) } catch (e) {}
+    try { await sender.replaceTrack(track) } catch {}
   }
 
   function showCommonLanguages(commonLanguages) {
@@ -680,23 +793,23 @@ function ChatPageContent() {
   }
 
   function handleAddFriend(targetUserId = partnerUserId) {
-    if (!socketRef.current || !targetUserId) return
+    if (!socketRef.current || !targetUserId || isGuest) return
     triggerMonetagVignette()
     socketRef.current?.emit('send-friend-request', { targetUserId })
   }
 
   function handleAcceptFriendRequest(requestId) {
-    if (!socketRef.current || !requestId) return
+    if (!socketRef.current || !requestId || isGuest) return
     socketRef.current.emit('accept-friend-request', { requestId })
   }
 
   function handleRejectFriendRequest(requestId) {
-    if (!socketRef.current || !requestId) return
+    if (!socketRef.current || !requestId || isGuest) return
     socketRef.current.emit('reject-friend-request', { requestId })
   }
 
   function handleConnectFriend(friendAnonId, explicitMode) {
-    if (!socketRef.current || !friendAnonId) return
+    if (!socketRef.current || !friendAnonId || isGuest) return
     const connectMode = explicitMode || mode
     socketRef.current.emit('connect-friend', { friendAnonId, mode: connectMode })
     setShowFriendsPanel(false)
@@ -725,7 +838,7 @@ function ChatPageContent() {
           setSocketConnected(true)
           setError(null)
           setConnectionNotice('')
-          socket.emit('get-friends-status')
+          if (!isGuest) socket.emit('get-friends-status')
           if (pendingStartRef.current) joinQueue()
         })
 
@@ -736,15 +849,23 @@ function ChatPageContent() {
         socket.on('receive-message', handleReceiveMessage)
         socket.on('typing', () => setIsPartnerTyping(true))
         socket.on('stop-typing', () => setIsPartnerTyping(false))
-        socket.on('friends-status', data => setFriends(Array.isArray(data?.friends) ? data.friends : []))
-        socket.on('friend-requests', data => setFriendRequests({ incoming: Array.isArray(data?.incoming) ? data.incoming : [], outgoing: Array.isArray(data?.outgoing) ? data.outgoing : [] }))
-        socket.on('history-updated', data => setInteractionHistory(Array.isArray(data?.history) ? data.history : []))
-        socket.on('friend-request-received', () => showActionFeedback('New friend request received'))
+        // Social events — only meaningful for full users
+        socket.on('friends-status', data => {
+          if (!isGuest) setFriends(Array.isArray(data?.friends) ? data.friends : [])
+        })
+        socket.on('friend-requests', data => {
+          if (!isGuest) setFriendRequests({ incoming: Array.isArray(data?.incoming) ? data.incoming : [], outgoing: Array.isArray(data?.outgoing) ? data.outgoing : [] })
+        })
+        socket.on('history-updated', data => {
+          if (!isGuest) setInteractionHistory(Array.isArray(data?.history) ? data.history : [])
+        })
+        socket.on('friend-request-received', () => { if (!isGuest) showActionFeedback('New friend request received') })
         socket.on('friend-online-status', data => {
-          if (!data?.friendAnonId && !data?.friendUserId) return
+          if (isGuest || !data?.friendAnonId && !data?.friendUserId) return
           upsertFriend({ friendAnonId: data.friendUserId || data.friendAnonId, friendUserId: data.friendUserId || data.friendAnonId, online: !!data.online })
         })
         socket.on('friend-connect-result', data => {
+          if (isGuest) return
           if (!data?.ok) {
             const msgs = { offline: 'Friend is offline', 'not-friends': 'You are not friends yet', declined: 'Friend declined the invite', expired: 'Friend invite expired' }
             showActionFeedback(msgs[data?.reason] || 'Unable to connect friend right now')
@@ -753,9 +874,11 @@ function ChatPageContent() {
           if (data?.pending) { setPendingInviteRequestId(data.inviteId); showActionFeedback('Invite sent to your friend'); return }
           setPendingInviteRequestId(null); showActionFeedback('Connecting to friend...')
         })
-        socket.on('friend-connect-invite', data => setFriendInviteRequest(data))
+        socket.on('friend-connect-invite', data => { if (!isGuest) setFriendInviteRequest(data) })
         socket.on('partner-likes-updated', data => { if (typeof data?.likes === 'number') setPartnerLikes(data.likes) })
         socket.on('received-like', data => {
+          // Server should not send this to guests, but guard client-side too
+          if (isGuest) return
           const senderName = data?.senderName || null
           showReceivedLike(senderName)
           if (typeof data?.totalLikes === 'number') showActionFeedback(`You got a like 👍 · Total ${data.totalLikes}`)
@@ -771,14 +894,16 @@ function ChatPageContent() {
             if (data.status === 'ok' || data.status === 'duplicate') setHasReportedPartner(true)
             showActionFeedback(data.status === 'duplicate' ? 'You already reported this user' : 'Report submitted')
           }
-          if (data.type === 'friend-request') {
-            if (['ok', 'duplicate', 'awaiting-your-response', 'already-friends'].includes(data.status)) setHasAddedFriendForCurrentMatch(true)
-            const msgs = { ok: 'Friend request sent', duplicate: 'Friend request already sent', 'awaiting-your-response': 'This user has already sent you a request', 'already-friends': 'Already in your friends list' }
-            if (msgs[data.status]) showActionFeedback(msgs[data.status])
+          if (!isGuest) {
+            if (data.type === 'friend-request') {
+              if (['ok', 'duplicate', 'awaiting-your-response', 'already-friends'].includes(data.status)) setHasAddedFriendForCurrentMatch(true)
+              const msgs = { ok: 'Friend request sent', duplicate: 'Friend request already sent', 'awaiting-your-response': 'This user has already sent you a request', 'already-friends': 'Already in your friends list' }
+              if (msgs[data.status]) showActionFeedback(msgs[data.status])
+            }
+            if (data.type === 'friend-request-accept' && data.status === 'ok') showActionFeedback('Friend request accepted')
+            if (data.type === 'friend-request-reject' && data.status === 'ok') showActionFeedback('Friend request rejected')
+            if (data.type === 'unfriend' && data.status === 'ok') showActionFeedback('Friend removed')
           }
-          if (data.type === 'friend-request-accept' && data.status === 'ok') showActionFeedback('Friend request accepted')
-          if (data.type === 'friend-request-reject' && data.status === 'ok') showActionFeedback('Friend request rejected')
-          if (data.type === 'unfriend' && data.status === 'ok') showActionFeedback('Friend removed')
         })
         socket.on('stats', data => {
           if (typeof data?.online === 'number') { setOnlineCount(data.online); setLastOnlineCount(data.online) }
@@ -794,8 +919,8 @@ function ChatPageContent() {
         })
         socket.on('connect_error', () => { setSocketConnected(false); if (pendingStartRef.current) showConnectionNotice('Reconnecting to chat...') })
         socket.on('disconnect', reason => { setSocketConnected(false); if (pendingStartRef.current && reason !== 'io client disconnect') showConnectionNotice('Connection lost. Reconnecting...') })
-        socket.emit('get-friends-status')
-      } catch (err) {
+        if (!isGuest) socket.emit('get-friends-status')
+      } catch {
         setError('Failed to initialize connection')
       }
     }
@@ -812,20 +937,21 @@ function ChatPageContent() {
       }
       if (actionFeedbackTimeoutRef.current) clearTimeout(actionFeedbackTimeoutRef.current)
     }
-  }, [sessionResolved, sessionUser?.id])
+  }, [sessionResolved, sessionUser?.id, isGuest])
 
   useEffect(() => {
     if (!socketConnected || !socketRef.current) return
     socketRef.current.emit('identify-user', {
       anonUserId: anonUserIdRef.current,
-      userId: sessionUser?.id || null,
-      displayName: sessionUser?.name || null,
-      email: sessionUser?.email || '',
-      image: sessionUser?.image || null,
+      userId: isGuest ? null : (sessionUser?.id || null),
+      displayName: isGuest ? null : (sessionUser?.name || null),
+      email: isGuest ? '' : (sessionUser?.email || ''),
+      image: isGuest ? null : (sessionUser?.image || null),
       country: selfCountry,
+      isGuest,
     })
-    socketRef.current.emit('get-friends-status')
-  }, [sessionUser, selfCountry, socketConnected])
+    if (!isGuest) socketRef.current.emit('get-friends-status')
+  }, [sessionUser, selfCountry, socketConnected, isGuest])
 
   function formatOnlineCount(n) {
     if (typeof n !== 'number') return null
@@ -937,23 +1063,16 @@ function ChatPageContent() {
 
   function preWarmPeerConnection() {
     if (preWarmedPcRef.current) {
-      try { preWarmedPcRef.current.close() } catch (_) {}
+      try { preWarmedPcRef.current.close() } catch {}
       preWarmedPcRef.current = null
     }
     if (!localStreamRef.current) return
     try {
       const baseConfig = buildRtcConfig(turnIceServers)
-      const pc = new RTCPeerConnection({
-        ...baseConfig,
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 10,
-      })
-      localStreamRef.current.getTracks().forEach(t => {
-        try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
-      })
+      const pc = new RTCPeerConnection({ ...baseConfig, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require', iceCandidatePoolSize: 10 })
+      localStreamRef.current.getTracks().forEach(t => { try { pc.addTrack(t, localStreamRef.current) } catch {} })
       preWarmedPcRef.current = pc
-    } catch (_) {}
+    } catch {}
   }
 
   function joinQueue() {
@@ -970,21 +1089,17 @@ function ChatPageContent() {
       mode,
       interestKeywords,
       anonUserId: anonUserIdRef.current,
-      userId: sessionUser?.id || null,
-      displayName: sessionUser?.name || null,
-      email: sessionUser?.email || '',
-      image: sessionUser?.image || null,
+      userId: isGuest ? null : (sessionUser?.id || null),
+      displayName: isGuest ? null : (sessionUser?.name || null),
+      email: isGuest ? '' : (sessionUser?.email || ''),
+      image: isGuest ? null : (sessionUser?.image || null),
       country: selfCountry,
+      isGuest,
     })
   }
 
   function handleMatched(data) {
     const matchedMode = data?.mode === 'voice' ? 'voice' : 'video'
-    // Friend connections carry an explicit mode agreed by the inviter.
-    // Applying the URL-mode guard here would silently reject the connection when
-    // the two users are on different mode pages, causing them to be re-queued for
-    // random matches instead — the exact bug reported.  Skip the check for
-    // isFriendConnection; the server already validated both sessions' modes.
     if (matchedMode !== mode && !data?.isFriendConnection) {
       socketRef.current?.emit('next', { reason: 'mode-mismatch' })
       resetSessionUi()
@@ -1013,19 +1128,21 @@ function ChatPageContent() {
     const historyId = data.roomId || `${data.partnerId}_${Date.now()}`
     currentMatchHistoryIdRef.current = historyId
     const derivedCountry = data.partnerCountry || { countryCode: null, countryName: 'Unknown', countryFlag: '🌐' }
-    upsertInteractionHistory({
-      id: historyId,
-      partnerSocketId: data.partnerId,
-      partnerUserId: data.partnerUserId || null,
-      partnerName: data.partnerProfile?.name || data.partnerLanguage?.name || 'Unknown',
-      partnerImage: data.partnerProfile?.image || null,
-      countryName: derivedCountry?.countryName || 'Unknown',
-      countryFlag: derivedCountry?.countryFlag || '🌐',
-      languageName: data.partnerLanguage?.name || 'Unknown',
-      mode,
-      connectedAt: new Date().toISOString(),
-      isFriendConnection: !!data.isFriendConnection,
-    })
+    if (!isGuest) {
+      upsertInteractionHistory({
+        id: historyId,
+        partnerSocketId: data.partnerId,
+        partnerUserId: data.partnerUserId || null,
+        partnerName: data.partnerProfile?.name || data.partnerLanguage?.name || 'Unknown',
+        partnerImage: data.partnerProfile?.image || null,
+        countryName: derivedCountry?.countryName || 'Unknown',
+        countryFlag: derivedCountry?.countryFlag || '🌐',
+        languageName: data.partnerLanguage?.name || 'Unknown',
+        mode,
+        connectedAt: new Date().toISOString(),
+        isFriendConnection: !!data.isFriendConnection,
+      })
+    }
     initPeerConnection(data.isInitiator, data.partnerId)
   }
 
@@ -1048,10 +1165,10 @@ function ChatPageContent() {
         const queuedForAnswer = iceCandidateQueue.current.splice(0)
         await Promise.all(queuedForAnswer.map(c => pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {})))
       } else if (data.type === 'ice-candidate' && data.payload) {
-        if (pc && pc.remoteDescription) { try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)) } catch (e) {} }
+        if (pc && pc.remoteDescription) { try { await pc.addIceCandidate(new RTCIceCandidate(data.payload)) } catch {} }
         else iceCandidateQueue.current.push(data.payload)
       }
-    } catch (err) {}
+    } catch {}
   }
 
   function handlePartnerLeft() {
@@ -1076,30 +1193,15 @@ function ChatPageContent() {
     cleanupPeerConnection()
     const prewarm = preWarmedPcRef.current
     let pc
-    if (
-      prewarm &&
-      prewarm.signalingState === 'stable' &&
-      prewarm.connectionState !== 'closed' &&
-      prewarm.connectionState !== 'failed'
-    ) {
+    if (prewarm && prewarm.signalingState === 'stable' && prewarm.connectionState !== 'closed' && prewarm.connectionState !== 'failed') {
       pc = prewarm
       preWarmedPcRef.current = null
     } else {
-      if (prewarm) {
-        try { prewarm.close() } catch (_) {}
-        preWarmedPcRef.current = null
-      }
+      if (prewarm) { try { prewarm.close() } catch {}; preWarmedPcRef.current = null }
       const baseConfig = buildRtcConfig(turnIceServers)
-      pc = new RTCPeerConnection({
-        ...baseConfig,
-        bundlePolicy: 'max-bundle',
-        rtcpMuxPolicy: 'require',
-        iceCandidatePoolSize: 10,
-      })
+      pc = new RTCPeerConnection({ ...baseConfig, bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require', iceCandidatePoolSize: 10 })
       if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(t => {
-          try { pc.addTrack(t, localStreamRef.current) } catch (_) {}
-        })
+        localStreamRef.current.getTracks().forEach(t => { try { pc.addTrack(t, localStreamRef.current) } catch {} })
       }
     }
 
@@ -1109,9 +1211,7 @@ function ChatPageContent() {
 
     pc.ontrack = event => {
       const tracks = event.streams?.[0]?.getTracks() || [event.track]
-      tracks.forEach(t => {
-        if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t)
-      })
+      tracks.forEach(t => { if (!remoteStream.getTrackById(t.id)) remoteStream.addTrack(t) })
       const remoteElement = mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current
       if (remoteElement) {
         if (remoteElement.srcObject !== remoteStream) remoteElement.srcObject = remoteStream
@@ -1120,51 +1220,40 @@ function ChatPageContent() {
     }
 
     pc.onicecandidate = event => {
-      if (event.candidate)
-        socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
+      if (event.candidate) socketRef.current?.emit('signal', { type: 'ice-candidate', to: peerId, payload: event.candidate.toJSON() })
     }
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') setConnectionState('connected')
       else if (pc.connectionState === 'failed') {
         cleanupPeerConnection()
-        if (pendingStartRef.current && socketRef.current?.connected) {
-          resetSessionUi(); showActionFeedback('Finding next match...'); joinQueue()
-        } else {
-          setConnectionState('idle'); showActionFeedback('Connection failed')
-        }
+        if (pendingStartRef.current && socketRef.current?.connected) { resetSessionUi(); showActionFeedback('Finding next match...'); joinQueue() }
+        else { setConnectionState('idle'); showActionFeedback('Connection failed') }
       } else if (pc.connectionState === 'disconnected') {
         setTimeout(() => {
           if (pcRef.current?.connectionState === 'disconnected' || pcRef.current?.connectionState === 'failed') {
             cleanupPeerConnection()
-            if (pendingStartRef.current && socketRef.current?.connected) {
-              resetSessionUi(); showActionFeedback('Reconnecting...'); joinQueue()
-            } else {
-              setConnectionState('idle'); showActionFeedback('Connection ended')
-            }
+            if (pendingStartRef.current && socketRef.current?.connected) { resetSessionUi(); showActionFeedback('Reconnecting...'); joinQueue() }
+            else { setConnectionState('idle'); showActionFeedback('Connection ended') }
           }
         }, 1500)
       }
     }
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed')
-        setConnectionState('connected')
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setConnectionState('connected')
     }
 
     if (isInitiator) {
       ;(async () => {
         try {
           if (pc.signalingState !== 'stable') return
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: mode === 'video',
-          })
+          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: mode === 'video' })
           if (pc.signalingState !== 'stable') return
           const optimisedSdp = preferVP8(offer.sdp)
           await pc.setLocalDescription({ type: offer.type, sdp: optimisedSdp })
           socketRef.current?.emit('signal', { type: 'offer', to: peerId, payload: pc.localDescription })
-        } catch (_) {}
+        } catch {}
       })()
     }
   }
@@ -1177,10 +1266,7 @@ function ChatPageContent() {
   }
 
   function resetSessionUi({ clearMessages = true } = {}) {
-    if (preWarmedPcRef.current) {
-      try { preWarmedPcRef.current.close() } catch (_) {}
-      preWarmedPcRef.current = null
-    }
+    if (preWarmedPcRef.current) { try { preWarmedPcRef.current.close() } catch {}; preWarmedPcRef.current = null }
     cleanupPeerConnection()
     stopFaceDetection()
     setPartnerId(null); setPartnerLanguage(null); setPartnerCountry(null); setPartnerUserId(null); setPartnerProfile(null)
@@ -1240,10 +1326,7 @@ function ChatPageContent() {
     pendingStartRef.current = false
     updateCurrentHistoryEntry({ endedAt: new Date().toISOString() })
     socketRef.current?.emit('next', { reason: 'end' })
-    if (preWarmedPcRef.current) {
-      try { preWarmedPcRef.current.close() } catch (_) {}
-      preWarmedPcRef.current = null
-    }
+    if (preWarmedPcRef.current) { try { preWarmedPcRef.current.close() } catch {}; preWarmedPcRef.current = null }
     cleanupPeerConnection()
     stopFaceDetection()
     if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop())
@@ -1284,9 +1367,7 @@ function ChatPageContent() {
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
   }, [messages])
 
-  function buildChatUrl(nextMode) {
-    return `/chat?mode=${nextMode}`
-  }
+  function buildChatUrl(nextMode) { return `/chat?mode=${nextMode}` }
 
   function performModeSwitch(nextMode) {
     setShowChat(false); setMobilePane('video'); setPanelTab(null)
@@ -1354,9 +1435,29 @@ function ChatPageContent() {
   const currentPartnerAlreadyFriend = partnerUserId ? friendIds.has(partnerUserId) : false
   const currentPartnerRequestPending = partnerUserId ? outgoingRequestIds.has(partnerUserId) : false
   const currentPartnerHasIncomingRequest = partnerUserId ? incomingRequestIds.has(partnerUserId) : false
-
-  // ── Whether to hide the sticky mobile bar (controls are overlaid on self-view in video mode)
   const hideMobileBar = mode === 'video' && !showChat && !showMobileCenterPane
+
+  // Sign-in gate modal (triggered from guest-restricted actions)
+  const renderSignInGate = () => {
+    if (!showSignInGate) return null
+    return (
+      <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="w-full max-w-sm rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Sign in required</h3>
+            <button onClick={() => setShowSignInGate(false)} className="text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
+          </div>
+          <p className="text-sm text-gray-400 mb-5">This feature is available to signed-in users only.</p>
+          <div className="flex justify-center">
+            <GoogleAuthButton onSignInSuccess={(user) => {
+              setSessionUser({ ...user, isGuest: false })
+              setShowSignInGate(false)
+            }} />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!sessionResolved) return <ChatPageFallback />
   if (!sessionUser) return null
@@ -1391,7 +1492,17 @@ function ChatPageContent() {
             </button>
             <div className="flex items-center justify-end gap-2 min-w-[44px]">
               {renderOnlineCountBadge()}
-              <GoogleAuthButton compact onOpenSettings={() => setSettingsOpen(true)} onLogoutSuccess={() => router.replace('/')} userOverride={sessionUser} />
+              {isGuest ? (
+                <button
+                  onClick={() => setShowSignInGate(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-600/10 px-3 py-1.5 text-xs font-medium text-violet-300 hover:bg-violet-600/20 transition-all"
+                >
+                  <LogIn className="w-3 h-3" />
+                  Sign In
+                </button>
+              ) : (
+                <GoogleAuthButton compact onOpenSettings={() => setSettingsOpen(true)} onLogoutSuccess={() => router.replace('/')} userOverride={sessionUser} />
+              )}
             </div>
           </div>
 
@@ -1401,23 +1512,44 @@ function ChatPageContent() {
                 {m === 'video' ? 'Video Chat' : 'Voice Chat'}
               </button>
             ))}
-            <button onClick={() => openPanel('history')} className={`rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'history' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>History</button>
-            <button onClick={() => openPanel('friends')} className={`relative rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'friends' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}>
-              Friends
-              {incomingRequestsCount > 0 && (
+            <button
+              onClick={() => openPanel('history')}
+              className={`rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'history' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}
+            >
+              History {isGuest && <Lock className="inline w-3 h-3 ml-0.5 opacity-60" />}
+            </button>
+            <button
+              onClick={() => openPanel('friends')}
+              className={`relative rounded-full px-3 py-1 sm:px-5 sm:py-2 whitespace-nowrap transition-all ${panelTab === 'friends' ? 'bg-violet-600 text-white' : 'hover:bg-gray-800'}`}
+            >
+              Friends {isGuest && <Lock className="inline w-3 h-3 ml-0.5 opacity-60" />}
+              {!isGuest && incomingRequestsCount > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-emerald-400 px-1 text-[10px] font-bold text-gray-900">{incomingRequestsCount}</span>
               )}
             </button>
           </div>
         </div>
 
-        <ProfileSettingsModal open={settingsOpen} user={sessionUser} onClose={() => setSettingsOpen(false)}
-          onSaved={user => {
-            setSessionUser(user)
-            socketRef.current?.emit('update-profile', { name: user?.name })
-            router.replace(`/chat?mode=${mode}`)
-          }}
-        />
+        {/* Guest banner */}
+        {isGuest && (
+          <div className="shrink-0 bg-violet-600/10 border-b border-violet-500/20 px-3 py-2 flex items-center justify-between gap-2">
+            <p className="text-xs text-violet-300">
+              <UserX className="inline w-3 h-3 mr-1" />
+              Browsing as Guest — History, friends & likes require sign-in
+            </p>
+            <button onClick={() => setShowSignInGate(true)} className="text-xs font-semibold text-violet-400 hover:text-violet-200 whitespace-nowrap">Sign In →</button>
+          </div>
+        )}
+
+        {!isGuest && (
+          <ProfileSettingsModal open={settingsOpen} user={sessionUser} onClose={() => setSettingsOpen(false)}
+            onSaved={user => {
+              setSessionUser(prev => ({ ...prev, ...user }))
+              socketRef.current?.emit('update-profile', { name: user?.name })
+              router.replace(`/chat?mode=${mode}`)
+            }}
+          />
+        )}
 
         {/* Preferences Modal */}
         {showPreferences && (
@@ -1505,7 +1637,7 @@ function ChatPageContent() {
           </div>
         )}
 
-        {friendInviteRequest?.inviteId && (
+        {!isGuest && friendInviteRequest?.inviteId && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
               <h3 className="text-lg font-semibold text-white mb-2">Friend invite</h3>
@@ -1518,7 +1650,7 @@ function ChatPageContent() {
           </div>
         )}
 
-        {unfriendTarget && (
+        {!isGuest && unfriendTarget && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900 p-6 shadow-2xl">
               <h3 className="text-lg font-semibold text-white mb-2">{unfriendConfirmStep === 1 ? 'Remove friend?' : 'Are you absolutely sure?'}</h3>
@@ -1533,6 +1665,8 @@ function ChatPageContent() {
           </div>
         )}
 
+        {renderSignInGate()}
+
         {/* ── MAIN LAYOUT ── */}
         <div className="flex-1 flex relative overflow-hidden min-h-0">
 
@@ -1544,33 +1678,16 @@ function ChatPageContent() {
           `}>
             {mode === 'video' ? (
               <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-                {/* ── FIX: starts at height:0, expands to 52px only when ad actually loads ── */}
                 <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60 flex justify-center items-center" style={{ height: 52 }}>
                   <AdsterraBanner className="sm:hidden" />
                 </div>
-
-                {/*
-                  ── FIX: Removed sm:p / sm:gap so no outer padding on mobile.
-                  Videos are edge-to-edge on mobile for a full-screen feel.
-                  On mobile: flex-col with proportional heights.
-                  On desktop: grid 2-col with padding and gap.
-                ──*/}
                 <div className="flex-1 min-h-0 sm:p-1.5 flex flex-col sm:grid sm:grid-cols-2 sm:gap-1.5 overflow-hidden">
-
-                  {/* ── Stranger / Remote video ── */}
+                  {/* Remote video */}
                   <div className="relative flex-1 sm:flex-[3] sm:flex-none min-h-0 sm:rounded-xl overflow-hidden bg-black">
                     <video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-contain sm:object-cover bg-black" />
-
-                    {/* Watermark */}
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-2 right-2 h-4 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-
-                    <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />
-
-                    {/* ── FIX: Partner country badge — now INSIDE the remote video div,
-                        visible on BOTH mobile and desktop. Shows as soon as we're
-                        connecting or connected (so it persists throughout the call). ── */}
-                    {(connectionState === 'connected' || connectionState === 'connecting') &&
-                      partnerDisplayCountry?.countryFlag && (
+                    {!isGuest && <ReceivedLikeToast message={receivedLikeToast.message} visible={receivedLikeToast.visible} />}
+                    {(connectionState === 'connected' || connectionState === 'connecting') && partnerDisplayCountry?.countryFlag && (
                       <div className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-lg bg-gray-900/75 px-2 py-1 backdrop-blur-sm border border-white/10">
                         <span className="text-base leading-none">{partnerDisplayCountry.countryFlag}</span>
                         {partnerDisplayCountry.countryName && partnerDisplayCountry.countryName !== 'Unknown' && (
@@ -1584,20 +1701,12 @@ function ChatPageContent() {
                         )}
                       </div>
                     )}
-
-                    {/* ── Chat toggle button floating on remote video (mobile, video mode) ── */}
-                    <button
-                      onClick={() => { setShowChat(true); setUnreadCount(0) }}
-                      className="sm:hidden absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-gray-900/75 border border-white/10 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm"
-                    >
+                    <button onClick={() => { setShowChat(true); setUnreadCount(0) }}
+                      className="sm:hidden absolute top-2 right-2 z-10 flex items-center gap-1 rounded-full bg-gray-900/75 border border-white/10 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">
                       <MessageSquare className="w-3.5 h-3.5" />
                       Chat
-                      {unreadCount > 0 && (
-                        <span className="ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold">{unreadCount}</span>
-                      )}
+                      {unreadCount > 0 && <span className="ml-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-violet-500 px-1 text-[10px] font-bold">{unreadCount}</span>}
                     </button>
-
-                    {/* Not-connected overlay */}
                     {connectionState !== 'connected' && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-gray-900/95 via-gray-900/95 to-gray-950/95 px-3 text-center">
                         <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10">
@@ -1608,13 +1717,9 @@ function ChatPageContent() {
                         <div className="mt-2 rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5 text-[10px] text-gray-400">
                           {selfCountry?.countryFlag || '🌐'} {selfCountry?.countryName || 'Unknown'}
                         </div>
-                        {mediaWarning && (
-                          <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200 max-w-[180px]">{mediaWarning}</div>
-                        )}
+                        {mediaWarning && <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200 max-w-[180px]">{mediaWarning}</div>}
                       </div>
                     )}
-
-                    {/* Like button */}
                     {connectionState === 'connected' && (
                       <button onClick={handleLikePartner} disabled={hasLikedPartner}
                         className={`absolute bottom-2 left-2 z-10 flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-lg transition-all backdrop-blur border
@@ -1624,53 +1729,25 @@ function ChatPageContent() {
                       </button>
                     )}
                   </div>
-
-                  {/* ── Self / Local video ──
-                      FIX: On mobile this is flex-[2] so it fills the remaining space
-                      all the way to the bottom of the screen (no sticky bar below it).
-                      The Start / Skip / Filters controls are overlaid at the bottom of
-                      this panel via an absolutely-positioned gradient strip. ── */}
+                  {/* Local video */}
                   <div className="relative flex-1 sm:flex-[2] sm:flex-none sm:rounded-xl overflow-hidden bg-black">
                     <video ref={localVideoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-contain sm:object-cover bg-black" style={{ transform: 'scaleX(-1)' }} />
-
-                    {/* Watermark */}
                     <img src="/logo.svg" alt="" className="pointer-events-none absolute bottom-14 sm:bottom-2 right-1 sm:right-2 h-3.5 sm:h-5 w-auto select-none opacity-20 grayscale brightness-[2.4]" />
-
-                    {isCameraOff && (
-                      <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
-                        <VideoOff className="w-4 sm:w-5 h-4 sm:h-5 text-gray-500" />
-                      </div>
-                    )}
-                    {!localStreamRef.current && (
-                      <div className="absolute inset-0 bg-gray-900/90 hidden sm:flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>
-                    )}
-
+                    {isCameraOff && <div className="absolute inset-0 bg-gray-900 flex items-center justify-center"><VideoOff className="w-4 sm:w-5 h-4 sm:h-5 text-gray-500" /></div>}
+                    {!localStreamRef.current && <div className="absolute inset-0 bg-gray-900/90 hidden sm:flex items-center justify-center text-xs text-gray-400">Preview unavailable</div>}
                     <FaceDetectionWarning visible={faceWarningVisible} countdown={faceCountdown} />
-
-                    {/* "You" label — pushed up on mobile to stay above controls */}
                     <div className="absolute left-1.5 sm:left-2 bottom-14 sm:bottom-2 text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-black/50 backdrop-blur border border-white/10">
-                      You · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
+                      {isGuest ? 'Guest' : 'You'} · {selfCountry?.countryFlag || '🌐'} <span className="hidden sm:inline">{selfCountry?.countryName || 'Unknown'}</span>
                     </div>
-
-                    {/* ── FIX: Mobile-only control overlay at bottom of self-view ──
-                        This replaces the sticky bottom bar on mobile in video mode.
-                        The gradient blends into the video so it feels native. ── */}
                     <div className="sm:hidden absolute bottom-0 left-0 right-0 z-20 px-2 pt-6 pb-2 bg-gradient-to-t from-gray-950/80 via-gray-950/40 to-transparent">
-                      <ControlButtons
-                        primaryActionIsStop={primaryActionIsStop}
-                        isMediaReady={isMediaReady}
+                      <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                         onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
-                        onSkip={handleNext}
-                        onFilters={handleOpenFilters}
-                        connectionState={hasActiveMatch ? connectionState : 'idle'}
-                      />
+                        onSkip={handleNext} onFilters={handleOpenFilters}
+                        connectionState={hasActiveMatch ? connectionState : 'idle'} />
                     </div>
                   </div>
                 </div>
-
                 <ChatDesktopAdBanner />
-
-                {/* Desktop control bar */}
                 <div className="shrink-0 hidden sm:block px-3 py-2 border-t border-gray-800/40">
                   <ControlButtons desktop compact={isPanelOpen} primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}
                     onPrimary={primaryActionIsStop ? handleStopSearch : handleStartSearch}
@@ -1679,7 +1756,7 @@ function ChatPageContent() {
                 </div>
               </div>
             ) : (
-              /* ── VOICE MODE ── */
+              /* Voice mode */
               <div className="w-full flex-1 min-h-0 flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 overflow-hidden">
                 <div className="sm:hidden shrink-0 w-full bg-gray-950 border-b border-gray-800/60 flex justify-center items-center" style={{ height: 52 }}>
                   <AdsterraBanner className="sm:hidden" />
@@ -1691,13 +1768,11 @@ function ChatPageContent() {
                   {partnerDisplayCountry && (connectionState === 'connected' || connectionState === 'connecting') && (
                     <div className="text-center">
                       <span className="text-2xl">{partnerDisplayCountry.countryFlag}</span>
-                      {partnerDisplayCountry.countryName && partnerDisplayCountry.countryName !== 'Unknown' && (
-                        <p className="text-base font-medium mt-1">{partnerDisplayCountry.countryName}</p>
-                      )}
+                      {partnerDisplayCountry.countryName && partnerDisplayCountry.countryName !== 'Unknown' && <p className="text-base font-medium mt-1">{partnerDisplayCountry.countryName}</p>}
                       <p className="text-sm text-gray-500">Stranger</p>
                     </div>
                   )}
-                  {(connectionState === 'waiting') && (
+                  {connectionState === 'waiting' && (
                     <div className="text-center">
                       <Loader2 className="w-8 h-8 text-violet-400 animate-spin mx-auto mb-2" />
                       <p className="text-sm text-gray-400">Searching for a voice chat partner…</p>
@@ -1729,9 +1804,7 @@ function ChatPageContent() {
                 <div className="text-center">
                   <Loader2 className="w-10 h-10 text-violet-400 animate-spin mx-auto mb-3" />
                   <p className="text-lg font-medium">Connecting…</p>
-                  {partnerDisplayCountry && partnerDisplayCountry.countryName !== 'Unknown' && (
-                    <p className="text-sm text-gray-400 mt-1">{partnerDisplayCountry.countryFlag} {partnerDisplayCountry.countryName}</p>
-                  )}
+                  {partnerDisplayCountry && partnerDisplayCountry.countryName !== 'Unknown' && <p className="text-sm text-gray-400 mt-1">{partnerDisplayCountry.countryFlag} {partnerDisplayCountry.countryName}</p>}
                 </div>
               </div>
             )}
@@ -1740,7 +1813,6 @@ function ChatPageContent() {
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 rounded-full border border-gray-700 bg-gray-900/90 px-4 py-2 text-xs text-gray-200 backdrop-blur">{connectionNotice}</div>
             )}
 
-            {/* ── Matched-interests badge (desktop only) ── */}
             {matchedInterests.length > 0 && connectionState === 'connected' && (
               <div className={`absolute top-28 left-4 z-10 hidden sm:flex flex-wrap gap-2 max-w-[70%] transition-opacity duration-500 ${matchedInterestsVisible ? 'opacity-100' : 'opacity-0'}`}>
                 {matchedInterests.map(interest => (
@@ -1761,157 +1833,165 @@ function ChatPageContent() {
               <span className="text-sm font-medium">{panelTab === 'history' ? 'History' : 'Friends'}</span>
               <button onClick={() => openPanel(panelTab)} className="text-gray-400 hover:text-white hidden sm:block"><X className="w-4 h-4" /></button>
             </div>
-            <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
-              {panelTab === 'history' ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[11px] uppercase tracking-wide text-gray-500">Interacted users</p>
-                    <span className="text-[11px] text-gray-500">{activeHistoryFriendEntries.length}</span>
-                  </div>
-                  {activeHistoryFriendEntries.length === 0 ? (
-                    <div className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3 text-xs text-gray-500">Your recent stranger history will appear here.</div>
-                  ) : activeHistoryFriendEntries.map(item => {
-                    const displayName = item.partnerName || `User ${String(item.partnerUserId || item.id).slice(-4)}`
-                    const targetUserId = item.partnerUserId || null
-                    const incomingRequest = friendRequests.incoming.find(r => r.requesterId === targetUserId)
-                    const alreadyFriend = targetUserId ? friendIds.has(targetUserId) : false
-                    const pendingOutgoing = targetUserId ? outgoingRequestIds.has(targetUserId) : false
-                    const pendingIncoming = targetUserId ? incomingRequestIds.has(targetUserId) : false
-                    return (
-                      <div key={item.id} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex min-w-0 items-center gap-3">
-                            {item.partnerImage
-                              ? <img src={item.partnerImage} alt={displayName} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
-                              : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{displayName.charAt(0).toUpperCase()}</div>}
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-medium text-white">{displayName}</p>
-                              <p className="truncate text-[11px] text-gray-400">{item.countryFlag || '🌐'} {item.countryName || 'Unknown'}</p>
-                            </div>
-                          </div>
-                          <span className="text-[10px] text-gray-500 uppercase">{item.mode}</span>
-                        </div>
-                        <p className="text-[11px] text-gray-500 truncate">{item.connectedAt ? new Date(item.connectedAt).toLocaleString() : 'Recently'}</p>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {pendingIncoming ? (
-                            <>
-                              <button onClick={() => handleAcceptFriendRequest(incomingRequest?.requestId)} disabled={!incomingRequest?.requestId} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-500 disabled:opacity-40">Accept Request</button>
-                              <button onClick={() => handleRejectFriendRequest(incomingRequest?.requestId)} disabled={!incomingRequest?.requestId} className="rounded-md border border-gray-700 px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-gray-700 disabled:opacity-40">Reject</button>
-                            </>
-                          ) : (
-                            <button onClick={() => handleAddFriend(targetUserId)} disabled={!targetUserId || alreadyFriend || pendingOutgoing}
-                              className="inline-flex items-center gap-1 rounded-md bg-emerald-600/20 border border-emerald-500/30 px-2 py-1 text-[11px] font-medium text-emerald-200 disabled:opacity-40">
-                              <UserPlus className="h-3 w-3" />
-                              {alreadyFriend ? 'Friend Added' : pendingOutgoing ? 'Request Sent' : 'Add Friend'}
-                            </button>
-                          )}
-                          <button onClick={() => openReportModal({ targetUserId, roomId: item.roomId || null, isCurrent: false })} disabled={!targetUserId}
-                            className="inline-flex items-center gap-1 rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40">
-                            <Flag className="h-3 w-3" /> Report
-                          </button>
-                          {item.onlineFriend?.online && (
-                            <div className="flex gap-1">
-                              <button onClick={() => handleConnectFriend(item.onlineFriend.friendAnonId, 'video')}
-                                className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-500">
-                                <Video className="h-3 w-3" /> Video
-                              </button>
-                              <button onClick={() => handleConnectFriend(item.onlineFriend.friendAnonId, 'voice')}
-                                className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-purple-500">
-                                <Mic className="h-3 w-3" /> Voice
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="space-y-4">
+
+            {/* Guest gate — real data never reaches DOM */}
+            {isGuest ? (
+              <div className="flex-1 min-h-0 relative overflow-hidden">
+                <GuestPanelGate
+                  feature={panelTab === 'history' ? 'your history' : 'your friends'}
+                  onSignIn={() => setShowSignInGate(true)}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+                {panelTab === 'history' ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-[11px] uppercase tracking-wide text-gray-500">Friends</p>
-                      <span className="text-[11px] text-gray-500">{sortedFriends.length}</span>
+                      <p className="text-[11px] uppercase tracking-wide text-gray-500">Interacted users</p>
+                      <span className="text-[11px] text-gray-500">{activeHistoryFriendEntries.length}</span>
                     </div>
-                    {sortedFriends.length === 0
-                      ? <div className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3 text-xs text-gray-500">Added friends will appear here.</div>
-                      : sortedFriends.map(friend => (
-                          <div key={friend.friendUserId || friend.friendAnonId} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3">
-                            <div className="flex items-center gap-3">
-                              {friend.image
-                                ? <img src={friend.image} alt={friend.name || 'Friend'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
-                                : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{(friend.name || 'U').charAt(0).toUpperCase()}</div>}
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-xs font-medium text-white">{friend.name || `User ${String(friend.friendUserId || friend.friendAnonId).slice(-4)}`}</p>
-                                <p className="truncate text-[11px] text-gray-400">{friend.countryFlag || '🌐'} {friend.countryName || 'Unknown'}</p>
+                    {activeHistoryFriendEntries.length === 0 ? (
+                      <div className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3 text-xs text-gray-500">Your recent stranger history will appear here.</div>
+                    ) : activeHistoryFriendEntries.map(item => {
+                      const displayName = item.partnerName || `User ${String(item.partnerUserId || item.id).slice(-4)}`
+                      const targetUserId = item.partnerUserId || null
+                      const incomingRequest = friendRequests.incoming.find(r => r.requesterId === targetUserId)
+                      const alreadyFriend = targetUserId ? friendIds.has(targetUserId) : false
+                      const pendingOutgoing = targetUserId ? outgoingRequestIds.has(targetUserId) : false
+                      const pendingIncoming = targetUserId ? incomingRequestIds.has(targetUserId) : false
+                      return (
+                        <div key={item.id} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                              {item.partnerImage
+                                ? <img src={item.partnerImage} alt={displayName} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
+                                : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{displayName.charAt(0).toUpperCase()}</div>}
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-medium text-white">{displayName}</p>
+                                <p className="truncate text-[11px] text-gray-400">{item.countryFlag || '🌐'} {item.countryName || 'Unknown'}</p>
                               </div>
                             </div>
-                            <div className="mt-2 flex items-center gap-1">
-                              <span className={`text-[11px] flex-1 ${friend.online ? 'text-green-300' : 'text-gray-500'}`}>{friend.online ? 'Online' : 'Offline'}</span>
-                              {friend.online && (
-                                <>
-                                  <button onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId, 'video')}
-                                    disabled={!!pendingInviteRequestId}
-                                    className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500">
-                                    <Video className="h-3 w-3" /> Video
-                                  </button>
-                                  <button onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId, 'voice')}
-                                    disabled={!!pendingInviteRequestId}
-                                    className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500">
-                                    <Mic className="h-3 w-3" /> Voice
-                                  </button>
-                                </>
-                              )}
-                              {!friend.online && <span className="text-[11px] text-gray-600 italic">Offline</span>}
+                            <span className="text-[10px] text-gray-500 uppercase">{item.mode}</span>
+                          </div>
+                          <p className="text-[11px] text-gray-500 truncate">{item.connectedAt ? new Date(item.connectedAt).toLocaleString() : 'Recently'}</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {pendingIncoming ? (
+                              <>
+                                <button onClick={() => handleAcceptFriendRequest(incomingRequest?.requestId)} disabled={!incomingRequest?.requestId} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-500 disabled:opacity-40">Accept Request</button>
+                                <button onClick={() => handleRejectFriendRequest(incomingRequest?.requestId)} disabled={!incomingRequest?.requestId} className="rounded-md border border-gray-700 px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-gray-700 disabled:opacity-40">Reject</button>
+                              </>
+                            ) : (
+                              <button onClick={() => handleAddFriend(targetUserId)} disabled={!targetUserId || alreadyFriend || pendingOutgoing}
+                                className="inline-flex items-center gap-1 rounded-md bg-emerald-600/20 border border-emerald-500/30 px-2 py-1 text-[11px] font-medium text-emerald-200 disabled:opacity-40">
+                                <UserPlus className="h-3 w-3" />
+                                {alreadyFriend ? 'Friend Added' : pendingOutgoing ? 'Request Sent' : 'Add Friend'}
+                              </button>
+                            )}
+                            <button onClick={() => openReportModal({ targetUserId, roomId: item.roomId || null, isCurrent: false })} disabled={!targetUserId}
+                              className="inline-flex items-center gap-1 rounded-md bg-amber-600/20 border border-amber-500/30 px-2 py-1 text-[11px] font-medium text-amber-200 disabled:opacity-40">
+                              <Flag className="h-3 w-3" /> Report
+                            </button>
+                            {item.onlineFriend?.online && (
+                              <div className="flex gap-1">
+                                <button onClick={() => handleConnectFriend(item.onlineFriend.friendAnonId, 'video')}
+                                  className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-500">
+                                  <Video className="h-3 w-3" /> Video
+                                </button>
+                                <button onClick={() => handleConnectFriend(item.onlineFriend.friendAnonId, 'voice')}
+                                  className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-purple-500">
+                                  <Mic className="h-3 w-3" /> Voice
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-500">Friends</p>
+                        <span className="text-[11px] text-gray-500">{sortedFriends.length}</span>
+                      </div>
+                      {sortedFriends.length === 0
+                        ? <div className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3 text-xs text-gray-500">Added friends will appear here.</div>
+                        : sortedFriends.map(friend => (
+                            <div key={friend.friendUserId || friend.friendAnonId} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3">
+                              <div className="flex items-center gap-3">
+                                {friend.image
+                                  ? <img src={friend.image} alt={friend.name || 'Friend'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
+                                  : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{(friend.name || 'U').charAt(0).toUpperCase()}</div>}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-xs font-medium text-white">{friend.name || `User ${String(friend.friendUserId || friend.friendAnonId).slice(-4)}`}</p>
+                                  <p className="truncate text-[11px] text-gray-400">{friend.countryFlag || '🌐'} {friend.countryName || 'Unknown'}</p>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex items-center gap-1">
+                                <span className={`text-[11px] flex-1 ${friend.online ? 'text-green-300' : 'text-gray-500'}`}>{friend.online ? 'Online' : 'Offline'}</span>
+                                {friend.online && (
+                                  <>
+                                    <button onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId, 'video')} disabled={!!pendingInviteRequestId}
+                                      className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-500">
+                                      <Video className="h-3 w-3" /> Video
+                                    </button>
+                                    <button onClick={() => handleConnectFriend(friend.friendUserId || friend.friendAnonId, 'voice')} disabled={!!pendingInviteRequestId}
+                                      className="inline-flex items-center gap-1 rounded-md bg-purple-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500">
+                                      <Mic className="h-3 w-3" /> Voice
+                                    </button>
+                                  </>
+                                )}
+                                {!friend.online && <span className="text-[11px] text-gray-600 italic">Offline</span>}
+                              </div>
+                              <button onClick={() => openUnfriendConfirmation(friend)} className="mt-2 rounded-md border border-red-500/20 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/10">Unfriend</button>
                             </div>
-                            <button onClick={() => openUnfriendConfirmation(friend)} className="mt-2 rounded-md border border-red-500/20 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/10">Unfriend</button>
-                          </div>
-                        ))}
-                  </div>
-
-                  <div className="space-y-2 border-t border-gray-800 pt-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] uppercase tracking-wide text-gray-500">Requests</p>
-                      <span className="text-[11px] text-gray-500">{(friendRequests.incoming?.length || 0) + (friendRequests.outgoing?.length || 0)}</span>
+                          ))}
                     </div>
-                    {friendRequests.incoming?.map(request => (
-                      <div key={request.requestId} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3 space-y-2">
-                        <div className="flex items-center gap-3">
-                          {request.profile?.image
-                            ? <img src={request.profile.image} alt={request.profile?.name || 'Request'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
-                            : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{(request.profile?.name || 'U').charAt(0).toUpperCase()}</div>}
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-medium text-white">{request.profile?.name || `User ${String(request.requesterId).slice(-4)}`}</p>
-                            <p className="truncate text-[11px] text-gray-400">{request.profile?.countryFlag || '🌐'} {request.profile?.countryName || 'Unknown'}</p>
+                    <div className="space-y-2 border-t border-gray-800 pt-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] uppercase tracking-wide text-gray-500">Requests</p>
+                        <span className="text-[11px] text-gray-500">{(friendRequests.incoming?.length || 0) + (friendRequests.outgoing?.length || 0)}</span>
+                      </div>
+                      {friendRequests.incoming?.map(request => (
+                        <div key={request.requestId} className="rounded-xl border border-gray-800 bg-gray-800/50 px-3 py-3 space-y-2">
+                          <div className="flex items-center gap-3">
+                            {request.profile?.image
+                              ? <img src={request.profile.image} alt={request.profile?.name || 'Request'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
+                              : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 text-sm font-semibold text-white">{(request.profile?.name || 'U').charAt(0).toUpperCase()}</div>}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-white">{request.profile?.name || `User ${String(request.requesterId).slice(-4)}`}</p>
+                              <p className="truncate text-[11px] text-gray-400">{request.profile?.countryFlag || '🌐'} {request.profile?.countryName || 'Unknown'}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleAcceptFriendRequest(request.requestId)} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-500">Accept</button>
+                            <button onClick={() => handleRejectFriendRequest(request.requestId)} className="rounded-md border border-gray-700 px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-gray-700">Reject</button>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => handleAcceptFriendRequest(request.requestId)} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-emerald-500">Accept</button>
-                          <button onClick={() => handleRejectFriendRequest(request.requestId)} className="rounded-md border border-gray-700 px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-gray-700">Reject</button>
-                        </div>
-                      </div>
-                    ))}
-                    {friendRequests.outgoing?.map(request => (
-                      <div key={request.requestId} className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3">
-                        <div className="flex items-center gap-3">
-                          {request.profile?.image
-                            ? <img src={request.profile.image} alt={request.profile?.name || 'Outgoing'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
-                            : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-sm font-semibold text-white">{(request.profile?.name || 'U').charAt(0).toUpperCase()}</div>}
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-medium text-white">{request.profile?.name || `User ${String(request.recipientId).slice(-4)}`}</p>
-                            <p className="truncate text-[11px] text-gray-400">{request.profile?.countryFlag || '🌐'} {request.profile?.countryName || 'Unknown'}</p>
+                      ))}
+                      {friendRequests.outgoing?.map(request => (
+                        <div key={request.requestId} className="rounded-xl border border-gray-800 bg-gray-800/40 px-3 py-3">
+                          <div className="flex items-center gap-3">
+                            {request.profile?.image
+                              ? <img src={request.profile.image} alt={request.profile?.name || 'Outgoing'} className="h-10 w-10 rounded-full object-cover" referrerPolicy="no-referrer" />
+                              : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-700 text-sm font-semibold text-white">{(request.profile?.name || 'U').charAt(0).toUpperCase()}</div>}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-white">{request.profile?.name || `User ${String(request.recipientId).slice(-4)}`}</p>
+                              <p className="truncate text-[11px] text-gray-400">{request.profile?.countryFlag || '🌐'} {request.profile?.countryName || 'Unknown'}</p>
+                            </div>
+                            <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-200">Pending</span>
                           </div>
-                          <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-medium text-amber-200">Pending</span>
                         </div>
-                      </div>
-                    ))}
-                    {!friendRequests.incoming?.length && !friendRequests.outgoing?.length && (
-                      <div className="rounded-xl border border-gray-800 bg-gray-800/30 px-3 py-3 text-xs text-gray-500">No pending requests right now.</div>
-                    )}
+                      ))}
+                      {!friendRequests.incoming?.length && !friendRequests.outgoing?.length && (
+                        <div className="rounded-xl border border-gray-800 bg-gray-800/30 px-3 py-3 text-xs text-gray-500">No pending requests right now.</div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── RIGHT: Text chat sidebar ── */}
@@ -1972,11 +2052,6 @@ function ChatPageContent() {
           </div>
         </div>
 
-        {/*
-          ── FIX: Mobile sticky bar ──
-          Hidden in video mode (controls are overlaid on self-view instead).
-          Still visible in voice mode and when chat/panel is open on mobile.
-        ──*/}
         {!hideMobileBar && (
           <div className="sticky bottom-0 z-20 shrink-0 bg-gray-900 border-t border-gray-800 px-3 py-2 sm:hidden">
             <ControlButtons primaryActionIsStop={primaryActionIsStop} isMediaReady={isMediaReady}

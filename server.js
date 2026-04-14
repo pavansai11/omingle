@@ -5,8 +5,6 @@ const next = require('next');
 const socialStore = require('./lib/social-store.cjs');
 const redis = require('./lib/upstash-redis.cjs');
 
-// Ensure `.env` is loaded even when PM2/systemd starts `node server.js`
-// directly in production. This avoids relying on shell `source .env` hacks.
 loadEnvConfig(process.cwd());
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -39,20 +37,28 @@ function parseCookies(cookieHeader = '') {
     }, {});
 }
 
+// ── Logging: only emit info/debug in dev; always emit errors ─────────────────
 function logInfo(...args) {
-  console.log(...args);
+  if (dev) console.log(...args);
 }
 
 function logWarn(...args) {
-  console.warn(...args);
+  if (dev) console.warn(...args);
 }
 
 function logError(...args) {
-  console.error(...args);
+  // Sanitize: never log raw cookie values, user IDs, or IP addresses in production
+  if (dev) {
+    console.error(...args);
+  } else {
+    // In production, log sanitized error messages only
+    const safe = args.map(a => (a instanceof Error ? a.message : typeof a === 'object' ? '[object]' : String(a))).join(' ');
+    console.error('[error]', safe);
+  }
 }
 
 function logDebug(...args) {
-  if (dev) console.log(...args);
+  if (dev) console.log('[debug]', ...args);
 }
 
 function sanitizeString(value, maxLength) {
@@ -70,9 +76,13 @@ function sanitizeImageUrl(value) {
     const parsed = new URL(trimmed);
     if (parsed.protocol !== 'https:') return null;
     return parsed.toString();
-  } catch (error) {
+  } catch {
     return null;
   }
+}
+
+function isValidGuestId(id) {
+  return typeof id === 'string' && /^guest_[a-f0-9]{32}$/.test(id);
 }
 
 function getAllowedOrigins() {
@@ -88,40 +98,39 @@ function getAllowedOrigins() {
 
 function assertProductionConfig() {
   if (dev) return;
-
   const missing = [];
   const hasMongo = !!(process.env.MONGODB_URI || process.env.MONGO_URL || (process.env.MONGO_USERNAME && process.env.MONGO_PASSWORD && process.env.MONGO_HOST));
-
   if (!hasMongo) missing.push('MongoDB configuration');
-  if (!process.env.REDIS_URL) {
-    missing.push('REDIS_URL');
-  }
-
-  if (missing.length) {
-    throw new Error(`Missing required production configuration: ${missing.join(', ')}`);
-  }
+  if (!process.env.REDIS_URL) missing.push('REDIS_URL');
+  if (missing.length) throw new Error(`Missing required production configuration: ${missing.join(', ')}`);
 }
 
 assertProductionConfig();
 
+// ── IP extraction helper ─────────────────────────────────────────────────────
+function getClientIp(handshake) {
+  const forwarded = handshake?.headers?.['x-forwarded-for'];
+  if (forwarded) {
+    const first = String(forwarded).split(',')[0].trim();
+    if (first) return first;
+  }
+  return handshake?.address || 'unknown';
+}
+
 app.prepare().then(() => {
-  // ── Startup: purge any stale legacy queue keys from previous code versions.
-  // The old shared-set keys (v2, v3) stored all modes mixed together and can
-  // still exist in Redis with up to 10-minute TTLs.  Deleting them on startup
-  // ensures the v4 per-mode sets are the only authoritative source of truth.
+  // Purge stale legacy queue keys
   Promise.all([
     redis.delKey('hippichat:queue:v2').catch(() => null),
     redis.delKey('hippichat:queue-members:v3').catch(() => null),
     redis.delKey('hippichat:queue-members').catch(() => null),
-  ]).then(() => logInfo('[Startup] Legacy queue keys pruned'))
-    .catch(() => {});
+  ]).catch(() => {});
 
   const httpServer = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url, true);
       await handle(req, res, parsedUrl);
     } catch (err) {
-      console.error('Error handling request:', req.url, err);
+      logError('Request handler error:', err);
       res.statusCode = 500;
       res.end('Internal server error');
     }
@@ -135,7 +144,7 @@ app.prepare().then(() => {
       origin: (origin, callback) => {
         if (!origin) return callback(null, true);
         if (dev || allowedOrigins.has(origin)) return callback(null, true);
-        return callback(new Error(`Origin not allowed: ${origin}`), false);
+        return callback(new Error('Origin not allowed'), false);
       },
       methods: ['GET', 'POST'],
     },
@@ -147,86 +156,78 @@ app.prepare().then(() => {
   const redisAdapter = redis.createSocketIoAdapter?.();
   if (redisAdapter) {
     io.adapter(redisAdapter);
-    console.log('[Socket] Redis adapter enabled');
+    logInfo('[Socket] Redis adapter enabled');
   }
 
   // In-memory state
-  // waitingQueue removed — queue is now fully Redis-authoritative
-  const matchingInProgress = new Set(); // socketIds currently being matched (process-local mutex)
-  const rooms = new Map(); // roomId -> { user1, user2, mode, startedAt }
-  const userSessions = new Map(); // socketId -> session data
-  const userReputation = new Map(); // anonUserId -> { likesReceived, reportsReceived }
-  const roomActions = new Map(); // roomId -> { likes: Set<anonUserId>, reports: Set<anonUserId> }
-  const onlineUsers = new Map(); // anonUserId -> Set<socketId>
-  const friendsByUser = new Map(); // anonUserId -> Set<anonUserId>
-  const userProfiles = new Map(); // anonUserId -> { countryName, countryFlag }
-  const pendingFriendInvites = new Map(); // inviteId -> { inviterUserId, inviterSocketId, inviteeUserId, inviteeSocketId, mode, timeout }
-  // Per-socket token that is replaced on every new join-queue call.
-  // Any in-flight coroutine from an older call detects the mismatch and aborts,
-  // preventing two concurrent join-queue calls from interleaving their Redis writes
-  // and leaving a socket registered in the wrong mode set.
-  const joinQueueTokens = new Map(); // socketId -> token string
+  const matchingInProgress = new Set();
+  const rooms = new Map();
+  const userSessions = new Map();
+  const userReputation = new Map();
+  const roomActions = new Map();
+  const onlineUsers = new Map();
+  const friendsByUser = new Map();
+  const userProfiles = new Map();
+  const pendingFriendInvites = new Map();
+  const joinQueueTokens = new Map();
 
-  // Simple presence count (connected sockets)
+  // ── Bot/abuse protection ─────────────────────────────────────────────────
+  // Track connections per IP to detect socket-flood bots
+  const ipConnectionCounts = new Map(); // ip -> count
+  const ipBanList = new Map(); // ip -> bannedUntil timestamp
+  const IP_MAX_CONNECTIONS = 15; // max simultaneous sockets per IP
+  const IP_BAN_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+  function isIpBanned(ip) {
+    if (!ip || ip === 'unknown') return false;
+    const bannedUntil = ipBanList.get(ip);
+    if (!bannedUntil) return false;
+    if (Date.now() > bannedUntil) { ipBanList.delete(ip); return false; }
+    return true;
+  }
+
+  function trackIpConnection(ip, delta) {
+    if (!ip || ip === 'unknown') return;
+    const current = (ipConnectionCounts.get(ip) || 0) + delta;
+    if (current <= 0) { ipConnectionCounts.delete(ip); return; }
+    ipConnectionCounts.set(ip, current);
+    if (delta > 0 && current > IP_MAX_CONNECTIONS) {
+      ipBanList.set(ip, Date.now() + IP_BAN_DURATION_MS);
+      logWarn('[Security] IP throttled for too many connections');
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   let connectedCount = 0;
   const PRESENCE_TTL_SECONDS = 180;
   const INVITE_TTL_SECONDS = 30;
   const QUEUE_TTL_SECONDS = 600;
   const ROOM_TTL_SECONDS = 2 * 60 * 60;
-  const QUEUE_KEY = 'hippichat:queue:v2'; // kept for legacy compat, no longer the live queue
-  // v3 (single shared set) is retired — v4 uses one set per mode so cross-mode
-  // candidates are physically impossible to select.
   const QUEUE_MEMBERS_VIDEO_KEY = 'hippichat:queue-members:v4:video';
   const QUEUE_MEMBERS_VOICE_KEY = 'hippichat:queue-members:v4:voice';
+
   function getQueueMembersKey(mode) {
     return normalizeMode(mode) === 'voice' ? QUEUE_MEMBERS_VOICE_KEY : QUEUE_MEMBERS_VIDEO_KEY;
   }
   const QUEUE_CLAIM_LOCK_PREFIX = 'hippichat:queue-claim:';
 
-  function getQueueEntryKey(socketId) {
-    return `hippichat:queue-entry:${socketId}`;
-  }
-
-  function getPresenceKey(identityId) {
-    return `hippichat:presence:${identityId}`;
-  }
-
-  function getInviteKey(inviteId) {
-    return `hippichat:invite:${inviteId}`;
-  }
-
-  function getInviteTimeoutKey(inviteId) {
-    return `hippichat:invite-timeout:${inviteId}`;
-  }
-
-  function getRoomKey(roomId) {
-    return `hippichat:room:${roomId}`;
-  }
+  function getQueueEntryKey(socketId) { return `hippichat:queue-entry:${socketId}`; }
+  function getPresenceKey(identityId) { return `hippichat:presence:${identityId}`; }
+  function getInviteKey(inviteId) { return `hippichat:invite:${inviteId}`; }
+  function getRoomKey(roomId) { return `hippichat:room:${roomId}`; }
 
   async function setPresence(identityId, sockets) {
     if (!identityId) return;
-    if (!sockets?.length) {
-      await redis.delKey(getPresenceKey(identityId)).catch(() => null);
-      return;
-    }
-    await redis.setJson(getPresenceKey(identityId), {
-      userId: identityId,
-      sockets,
-      online: true,
-      updatedAt: new Date().toISOString(),
-    }, PRESENCE_TTL_SECONDS).catch(() => null);
+    if (!sockets?.length) { await redis.delKey(getPresenceKey(identityId)).catch(() => null); return; }
+    await redis.setJson(getPresenceKey(identityId), { userId: identityId, sockets, online: true, updatedAt: new Date().toISOString() }, PRESENCE_TTL_SECONDS).catch(() => null);
   }
 
   async function setPendingInvite(inviteId, invite) {
     if (!inviteId || !invite) return;
     await redis.setJson(getInviteKey(inviteId), {
-      inviteId,
-      inviterUserId: invite.inviterUserId,
-      inviterSocketId: invite.inviterSocketId,
-      inviteeUserId: invite.inviteeUserId,
-      inviteeSocketId: invite.inviteeSocketId,
-      mode: invite.mode,
-      createdAt: new Date().toISOString(),
+      inviteId, inviterUserId: invite.inviterUserId, inviterSocketId: invite.inviterSocketId,
+      inviteeUserId: invite.inviteeUserId, inviteeSocketId: invite.inviteeSocketId,
+      mode: invite.mode, createdAt: new Date().toISOString(),
     }, INVITE_TTL_SECONDS).catch(() => null);
   }
 
@@ -235,18 +236,14 @@ app.prepare().then(() => {
     await redis.delKey(getInviteKey(inviteId)).catch(() => null);
   }
 
-  function getQueueClaimLockKey(socketId) {
-    return `${QUEUE_CLAIM_LOCK_PREFIX}${socketId}`;
-  }
+  function getQueueClaimLockKey(socketId) { return `${QUEUE_CLAIM_LOCK_PREFIX}${socketId}`; }
 
   async function acquireQueueClaimLock(socketId, ttlSeconds = 5) {
     if (!socketId) return false;
     try {
       const result = await redis.command('SET', [getQueueClaimLockKey(socketId), '1', 'EX', ttlSeconds, 'NX']);
       return result === 'OK';
-    } catch {
-      return false;
-    }
+    } catch { return false; }
   }
 
   async function releaseQueueClaimLock(socketId) {
@@ -254,23 +251,10 @@ app.prepare().then(() => {
     await redis.delKey(getQueueClaimLockKey(socketId)).catch(() => null);
   }
 
-  // ─── Redis-authoritative queue — optimised for minimum round-trips ──────────
-  //
-  // CALL COUNT (before → after):
-  //   removeFromRedisQueue : 3 sequential  → 2 parallel  (delKey + getJson together)
-  //   addToRedisQueue      : 3 sequential  → 2 rounds    (setJson || getJson, then setJson)
-  //   findAndClaimFromRQ   : 4+ sequential → 3 rounds    (getJson, parallel-getJson, parallel-delKey+setJson)
-  //   Total hot path       : 11 sequential → ~7 round-trips with parallelism
-  //
-  // matchingInProgress (in-memory Set) is the process-local mutex preventing
-  // two concurrent join-queue coroutines from double-claiming the same candidate.
-
   async function addToRedisQueue(entry) {
     try {
       const entryMode = normalizeMode(entry.mode);
       const membersKey = getQueueMembersKey(entryMode);
-      // Belt-and-suspenders: also remove from the OTHER mode set so that a
-      // socket can never appear in both sets simultaneously.
       const otherMembersKey = entryMode === 'voice' ? QUEUE_MEMBERS_VIDEO_KEY : QUEUE_MEMBERS_VOICE_KEY;
       const entryData = {
         socketId: entry.socketId,
@@ -279,22 +263,19 @@ app.prepare().then(() => {
         interests: entry.interests || [],
         joinedAt: entry.joinedAt instanceof Date ? entry.joinedAt.toISOString() : (entry.joinedAt || new Date().toISOString()),
       };
-
       await Promise.all([
         redis.setJson(getQueueEntryKey(entry.socketId), entryData, QUEUE_TTL_SECONDS),
         redis.sadd(membersKey, entry.socketId),
         redis.expire(membersKey, QUEUE_TTL_SECONDS).catch(() => 0),
-        redis.srem(otherMembersKey, entry.socketId).catch(() => 0), // prevent ghost entries in wrong mode set
+        redis.srem(otherMembersKey, entry.socketId).catch(() => 0),
       ]);
     } catch (err) {
-      logError('[Redis] Failed to add to queue:', err?.message || err);
+      logError('[Redis] Failed to add to queue:', err);
     }
   }
 
   async function removeFromRedisQueue(socketId) {
     try {
-      // Remove from both per-mode sets — srem on a non-member is a no-op,
-      // so this is safe and ensures no ghost entries remain in either set.
       await Promise.all([
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
         redis.srem(QUEUE_MEMBERS_VIDEO_KEY, socketId).catch(() => 0),
@@ -302,7 +283,7 @@ app.prepare().then(() => {
         releaseQueueClaimLock(socketId),
       ]);
     } catch (err) {
-      logError('[Redis] Failed to remove from queue:', err?.message || err);
+      logError('[Redis] Failed to remove from queue:', err);
     }
   }
 
@@ -313,55 +294,33 @@ app.prepare().then(() => {
         redis.scard(QUEUE_MEMBERS_VOICE_KEY).catch(() => 0),
       ]);
       return (video || 0) + (voice || 0);
-    } catch {
-      return 0;
-    }
+    } catch { return 0; }
   }
 
   async function findAndClaimFromRedisQueue(socketId, mode, interests = []) {
     const resolvedMode = normalizeMode(mode);
     const normalizedInterests = normalizeInterestKeywords(interests);
-
-    // Round 1: read only the set for the requested mode — cross-mode candidates
-    // are impossible at this level, no in-memory filtering needed.
     const membersKey = getQueueMembersKey(resolvedMode);
     const members = await redis.smembers(membersKey).catch(() => []);
     const currentMembers = Array.isArray(members) ? members : [];
-
-    const candidateIds = currentMembers.filter(
-      (id) => id !== socketId && !matchingInProgress.has(id)
-    );
+    const candidateIds = currentMembers.filter(id => id !== socketId && !matchingInProgress.has(id));
     if (!candidateIds.length) return null;
 
-    // Round 2: fetch all candidate entries IN PARALLEL
-    const entries = await Promise.all(
-      candidateIds.map((id) => redis.getJson(getQueueEntryKey(id)).catch(() => null))
-    );
-
-    // Validate: entry must exist AND be the correct mode (defense-in-depth).
+    const entries = await Promise.all(candidateIds.map(id => redis.getJson(getQueueEntryKey(id)).catch(() => null)));
     const candidates = entries
-      .map((entry) => (entry && normalizeMode(entry.mode) === resolvedMode ? entry : null))
+      .map(entry => (entry && normalizeMode(entry.mode) === resolvedMode ? entry : null))
       .filter(Boolean);
-
     if (!candidates.length) return null;
 
-    // Sort: prefer interest overlap, then longest wait
-    candidates.sort((a, b) =>
-      new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
-    );
+    candidates.sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
     const withOverlap = candidates
-      .map((c) => ({ entry: c, overlap: getMatchedInterests(normalizedInterests, c.interests || []) }))
-      .filter((c) => c.overlap.length > 0)
+      .map(c => ({ entry: c, overlap: getMatchedInterests(normalizedInterests, c.interests || []) }))
+      .filter(c => c.overlap.length > 0)
       .sort((a, b) => b.overlap.length - a.overlap.length);
-
     const selected = withOverlap[0]?.entry || candidates[0];
     if (!selected) return null;
 
-    // Process-local mutex: synchronous check before any await, so no two
-    // coroutines in the same Node.js event-loop tick can claim the same pair.
-    if (matchingInProgress.has(selected.socketId) || matchingInProgress.has(socketId)) {
-      return null;
-    }
+    if (matchingInProgress.has(selected.socketId) || matchingInProgress.has(socketId)) return null;
 
     const [sourceLocked, targetLocked] = await Promise.all([
       acquireQueueClaimLock(socketId),
@@ -377,67 +336,43 @@ app.prepare().then(() => {
     matchingInProgress.add(socketId);
 
     try {
-      // Re-fetch after holding the lock to guard against concurrent claims.
       const [selectedEntry, requesterEntry] = await Promise.all([
         redis.getJson(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.getJson(getQueueEntryKey(socketId)).catch(() => null),
       ]);
-
       if (!selectedEntry || !requesterEntry) return null;
-
-      // Final mode assertion — all three must agree.
-      if (
-        normalizeMode(selectedEntry.mode) !== resolvedMode ||
-        normalizeMode(requesterEntry.mode) !== resolvedMode
-      ) {
-        logWarn('[Queue] Mode mismatch after lock — discarding claim:', {
-          selected: selectedEntry.mode, requester: requesterEntry.mode, expected: resolvedMode,
-        });
+      if (normalizeMode(selectedEntry.mode) !== resolvedMode || normalizeMode(requesterEntry.mode) !== resolvedMode) {
+        logWarn('[Queue] Mode mismatch after lock — discarding claim');
         return null;
       }
-
       await Promise.all([
         redis.delKey(getQueueEntryKey(selected.socketId)).catch(() => null),
         redis.delKey(getQueueEntryKey(socketId)).catch(() => null),
         redis.srem(membersKey, selected.socketId, socketId).catch(() => 0),
       ]);
-
       return selected;
     } finally {
       matchingInProgress.delete(selected.socketId);
       matchingInProgress.delete(socketId);
-      await Promise.all([
-        releaseQueueClaimLock(socketId),
-        releaseQueueClaimLock(selected.socketId),
-      ]);
+      await Promise.all([releaseQueueClaimLock(socketId), releaseQueueClaimLock(selected.socketId)]);
     }
   }
-  // ──────────────────────────────────────────────────────────────────────────
 
   async function syncRoomSnapshot(roomId) {
     const room = rooms.get(roomId);
-    if (!room) {
-      await redis.delKey(getRoomKey(roomId)).catch(() => null);
-      return;
-    }
-
+    if (!room) { await redis.delKey(getRoomKey(roomId)).catch(() => null); return; }
     const user1Session = userSessions.get(room.user1);
     const user2Session = userSessions.get(room.user2);
     await redis.setJson(getRoomKey(roomId), {
-      roomId,
-      user1SocketId: room.user1,
-      user2SocketId: room.user2,
-      user1Id: getIdentityId(user1Session),
-      user2Id: getIdentityId(user2Session),
-      mode: room.mode,
-      matchedInterests: room.matchedInterests || [],
-      startedAt: room.startedAt,
+      roomId, user1SocketId: room.user1, user2SocketId: room.user2,
+      user1Id: getIdentityId(user1Session), user2Id: getIdentityId(user2Session),
+      mode: room.mode, matchedInterests: room.matchedInterests || [], startedAt: room.startedAt,
     }, ROOM_TTL_SECONDS).catch(() => null);
   }
 
   function queueBackground(task, label) {
-    Promise.resolve(task).catch((error) => {
-      console.error(label, error?.message || error);
+    Promise.resolve(task).catch(err => {
+      if (dev) logError(label, err?.message || err);
     });
   }
 
@@ -445,7 +380,7 @@ app.prepare().then(() => {
     if (!identityId) return [];
     const socketSet = onlineUsers.get(identityId);
     if (!socketSet || typeof socketSet[Symbol.iterator] !== 'function') return [];
-    return [...socketSet].filter((sid) => userSessions.has(sid));
+    return [...socketSet].filter(sid => userSessions.has(sid));
   }
 
   function isSocketInSameRoom(socketIdA, socketIdB) {
@@ -459,147 +394,95 @@ app.prepare().then(() => {
   }
 
   function logRuntimeStats(label = 'runtime') {
+    if (!dev) return; // Don't log runtime internals in production
     const memory = process.memoryUsage();
-    console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(memory.heapTotal / 1024 / 1024)}MB rooms=${rooms.size} sessions=${userSessions.size} onlineUsers=${onlineUsers.size} profiles=${userProfiles.size} reputation=${userReputation.size} invites=${pendingFriendInvites.size}`);
+    console.log(`[Runtime:${label}] rss=${Math.round(memory.rss / 1024 / 1024)}MB heapUsed=${Math.round(memory.heapUsed / 1024 / 1024)}MB rooms=${rooms.size} sessions=${userSessions.size}`);
   }
 
   function pruneRuntimeState() {
     const now = Date.now();
     const activeSocketIds = new Set(io.sockets.sockets.keys());
 
-    // Prune stale Redis queue entries (sockets no longer connected)
-    // We do this async but fire-and-forget; failures are non-critical
     queueBackground((async () => {
-      // Collect members from BOTH per-mode sets and clean each independently.
       const [videoMembers, voiceMembers] = await Promise.all([
         redis.smembers(QUEUE_MEMBERS_VIDEO_KEY).catch(() => []),
         redis.smembers(QUEUE_MEMBERS_VOICE_KEY).catch(() => []),
       ]);
-
-      for (const [membersKey, members] of [
-        [QUEUE_MEMBERS_VIDEO_KEY, videoMembers || []],
-        [QUEUE_MEMBERS_VOICE_KEY, voiceMembers || []],
-      ]) {
+      for (const [membersKey, members] of [[QUEUE_MEMBERS_VIDEO_KEY, videoMembers || []], [QUEUE_MEMBERS_VOICE_KEY, voiceMembers || []]]) {
         const validMembers = [];
         for (const socketId of members) {
           if (activeSocketIds.has(socketId)) {
             const entry = await redis.getJson(getQueueEntryKey(socketId)).catch(() => null);
             if (entry) {
               const joinedAt = new Date(entry.joinedAt || now).getTime();
-              if (now - joinedAt < 10 * 60 * 1000) {
-                validMembers.push(socketId);
-                continue;
-              }
+              if (now - joinedAt < 10 * 60 * 1000) { validMembers.push(socketId); continue; }
             }
           }
-          // Remove stale entry key
           await redis.delKey(getQueueEntryKey(socketId)).catch(() => null);
         }
         if (validMembers.length !== members.length) {
-          const staleMembers = members.filter((id) => !validMembers.includes(id));
-          if (staleMembers.length) {
-            await redis.srem(membersKey, ...staleMembers).catch(() => 0);
-          }
-          if (validMembers.length) {
-            await redis.expire(membersKey, QUEUE_TTL_SECONDS).catch(() => 0);
-          }
+          const staleMembers = members.filter(id => !validMembers.includes(id));
+          if (staleMembers.length) await redis.srem(membersKey, ...staleMembers).catch(() => 0);
+          if (validMembers.length) await redis.expire(membersKey, QUEUE_TTL_SECONDS).catch(() => 0);
         }
       }
     })(), '[Runtime] Failed to prune Redis queue');
 
     for (const [roomId, room] of rooms.entries()) {
       const startedAt = new Date(room.startedAt || now).getTime();
-      const stale = !activeSocketIds.has(room.user1) || !activeSocketIds.has(room.user2) || now - startedAt > 2 * 60 * 60 * 1000;
-      if (stale) {
-        rooms.delete(roomId);
-        roomActions.delete(roomId);
+      if (!activeSocketIds.has(room.user1) || !activeSocketIds.has(room.user2) || now - startedAt > 2 * 60 * 60 * 1000) {
+        rooms.delete(roomId); roomActions.delete(roomId);
       }
     }
-
-    for (const [socketId, session] of userSessions.entries()) {
-      if (!activeSocketIds.has(socketId)) {
-        userSessions.delete(socketId);
-      } else {
-        session.lastSeen = new Date();
-      }
+    for (const [socketId] of userSessions.entries()) {
+      if (!activeSocketIds.has(socketId)) userSessions.delete(socketId);
     }
-
     for (const [userId, sockets] of onlineUsers.entries()) {
-      for (const sid of [...sockets]) {
-        if (!activeSocketIds.has(sid)) sockets.delete(sid);
-      }
+      for (const sid of [...sockets]) { if (!activeSocketIds.has(sid)) sockets.delete(sid); }
       if (sockets.size === 0) onlineUsers.delete(userId);
     }
-
     for (const [inviteId, invite] of pendingFriendInvites.entries()) {
       if (!activeSocketIds.has(invite.inviterSocketId) || !activeSocketIds.has(invite.inviteeSocketId)) {
         if (invite.timeout) clearTimeout(invite.timeout);
         pendingFriendInvites.delete(inviteId);
       }
     }
-
     for (const [userId, rep] of userReputation.entries()) {
       const lastSeen = new Date(rep.lastSeen || now).getTime();
-      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) {
-        userReputation.delete(userId);
-      }
+      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) userReputation.delete(userId);
     }
-
     for (const [socketId] of joinQueueTokens.entries()) {
       if (!activeSocketIds.has(socketId)) joinQueueTokens.delete(socketId);
     }
-
     for (const [userId, profile] of userProfiles.entries()) {
       const lastSeen = new Date(profile.lastSeen || now).getTime();
-      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) {
-        userProfiles.delete(userId);
-      }
+      if (!onlineUsers.has(userId) && now - lastSeen > 6 * 60 * 60 * 1000) userProfiles.delete(userId);
+    }
+    // Prune IP ban list
+    for (const [ip, bannedUntil] of ipBanList.entries()) {
+      if (Date.now() > bannedUntil) ipBanList.delete(ip);
     }
   }
 
   function normalizeInterestKeywords(rawKeywords = []) {
     return [...new Set(
       (Array.isArray(rawKeywords) ? rawKeywords : [])
-        .map((keyword) => String(keyword || '').trim().toLowerCase())
-        .filter(Boolean)
-        .map((keyword) => keyword.slice(0, 32))
+        .map(k => String(k || '').trim().toLowerCase()).filter(Boolean).map(k => k.slice(0, 32))
     )].slice(0, 5);
   }
 
   function getMatchedInterests(interestsA = [], interestsB = []) {
     if (!interestsA.length || !interestsB.length) return [];
     const setB = new Set(interestsB);
-    return interestsA.filter((keyword) => setB.has(keyword));
+    return interestsA.filter(k => setB.has(k));
   }
 
-  function getQueueEntryWaitMs(entry) {
-    return Math.max(0, Date.now() - new Date(entry.joinedAt || Date.now()).getTime());
-  }
+  function normalizeMode(mode) { return mode === 'voice' ? 'voice' : 'video'; }
+  function parseMode(mode) { if (mode === 'video' || mode === 'voice') return mode; return null; }
 
-  function normalizeMode(mode) {
-    return mode === 'voice' ? 'voice' : 'video';
-  }
-
-  function parseMode(mode) {
-    if (mode === 'video' || mode === 'voice') return mode;
-    return null;
-  }
-
-  function getActiveSocketKey(identityId) {
-    return `hippichat:active-socket:${identityId}`;
-  }
-
-  function getReportDedupeKey(reporterId, reportedId) {
-    return `hippichat:report-dedupe:${reporterId}:${reportedId}`;
-  }
-
-  function getReportCountKey(reportedId) {
-    return `hippichat:report-count:${reportedId}`;
-  }
-
-  function getUserBlockKey(identityId) {
-    return `hippichat:user-block:${identityId}`;
-  }
+  function getReportDedupeKey(reporterId, reportedId) { return `hippichat:report-dedupe:${reporterId}:${reportedId}`; }
+  function getReportCountKey(reportedId) { return `hippichat:report-count:${reportedId}`; }
+  function getUserBlockKey(identityId) { return `hippichat:user-block:${identityId}`; }
 
   async function getModerationBlock(identityId) {
     if (!identityId) return null;
@@ -615,14 +498,11 @@ app.prepare().then(() => {
     if (!reportedId) return null;
     const severeReasons = new Set(['underage', 'nudity', 'hate-speech', 'threats']);
     const count = await redis.incr(getReportCountKey(reportedId), 60 * 60 * 24).catch(() => 1);
-
     let ttlSeconds = 0;
     if (severeReasons.has(reason)) ttlSeconds = 60 * 60 * 24;
     else if (count >= 3) ttlSeconds = 60 * 60 * 24;
     else if (count >= 2) ttlSeconds = 60 * 60;
-
     if (!ttlSeconds) return null;
-
     const blockedUntil = new Date(Date.now() + ttlSeconds * 1000).toISOString();
     const payload = { blockedUntil, reason, count };
     await setModerationBlock(reportedId, payload, ttlSeconds);
@@ -638,56 +518,31 @@ app.prepare().then(() => {
     const socketIds = getLiveSocketIds(identityId);
     if (!socketIds.length) return;
     for (const sid of socketIds) {
-      io.to(sid).emit('account-blocked', {
-        ...blockPayload,
-        message: formatBlockMessage(blockPayload),
-      });
+      io.to(sid).emit('account-blocked', { ...blockPayload, message: formatBlockMessage(blockPayload) });
       io.in(sid).disconnectSockets(true);
     }
   }
 
-  async function enforceSingleActiveSocket(identityId, socketId) {
-    // Intentionally relaxed to allow the same authenticated account to use
-    // multiple devices/tabs independently for matching and chatting.
-    return;
-  }
-
-  async function clearActiveSocket(identityId, socketId) {
-    return;
-  }
+  async function enforceSingleActiveSocket(identityId, socketId) { return; }
+  async function clearActiveSocket(identityId, socketId) { return; }
 
   async function broadcastStats() {
     const queueLength = await getRedisQueueLength().catch(() => 0);
-    io.emit('stats', {
-      online: connectedCount,
-      queueLength,
-      rooms: rooms.size,
-    });
-
+    io.emit('stats', { online: connectedCount, queueLength, rooms: rooms.size });
     queueBackground(
-      redis.setJson('hippichat:stats', {
-        online: connectedCount,
-        queueLength,
-        rooms: rooms.size,
-        updatedAt: new Date().toISOString(),
-      }, 180),
+      redis.setJson('hippichat:stats', { online: connectedCount, queueLength, rooms: rooms.size, updatedAt: new Date().toISOString() }, 180),
       '[Redis] Failed to sync stats'
     );
   }
 
   async function getReputationSnapshot(userId) {
     if (!userId) return { likesReceived: 0, reportsReceived: 0 };
-
     try {
       const stored = await socialStore.getUserReputation(userId);
-      const next = {
-        likesReceived: Number(stored?.likesReceived || 0),
-        reportsReceived: Number(stored?.reportsReceived || 0),
-        lastSeen: new Date(),
-      };
+      const next = { likesReceived: Number(stored?.likesReceived || 0), reportsReceived: Number(stored?.reportsReceived || 0), lastSeen: new Date() };
       userReputation.set(userId, next);
       return next;
-    } catch (error) {
+    } catch {
       const cached = userReputation.get(userId) || { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() };
       cached.lastSeen = new Date();
       userReputation.set(userId, cached);
@@ -697,17 +552,12 @@ app.prepare().then(() => {
 
   async function incrementReputation(userId, deltas = {}) {
     if (!userId) return { likesReceived: 0, reportsReceived: 0 };
-
     try {
       const updated = await socialStore.incrementUserReputation(userId, deltas);
-      const next = {
-        likesReceived: Number(updated?.likesReceived || 0),
-        reportsReceived: Number(updated?.reportsReceived || 0),
-        lastSeen: new Date(),
-      };
+      const next = { likesReceived: Number(updated?.likesReceived || 0), reportsReceived: Number(updated?.reportsReceived || 0), lastSeen: new Date() };
       userReputation.set(userId, next);
       return next;
-    } catch (error) {
+    } catch {
       const cached = userReputation.get(userId) || { likesReceived: 0, reportsReceived: 0, lastSeen: new Date() };
       cached.likesReceived = Math.max(0, Number(cached.likesReceived || 0) + Number(deltas?.likesReceived || 0));
       cached.reportsReceived = Math.max(0, Number(cached.reportsReceived || 0) + Number(deltas?.reportsReceived || 0));
@@ -738,9 +588,9 @@ app.prepare().then(() => {
   function buildProfileSnapshot(session) {
     return {
       userId: getIdentityId(session),
-      name: session.displayName || `User ${String(getIdentityId(session) || '').slice(-4)}`,
-      email: session.email || '',
-      image: session.image || null,
+      name: session.isGuest ? 'Guest' : (session.displayName || `User ${String(getIdentityId(session) || '').slice(-4)}`),
+      email: session.isGuest ? '' : (session.email || ''),
+      image: session.isGuest ? null : (session.image || null),
       countryCode: session.country?.countryCode || null,
       countryName: session.country?.countryName || 'Unknown',
       countryFlag: session.country?.countryFlag || '🌐',
@@ -748,53 +598,22 @@ app.prepare().then(() => {
   }
 
   function resolveCountryPayload(sessionCountry, fallbackProfile = null) {
-    if (sessionCountry?.countryName && sessionCountry.countryName !== 'Unknown') {
-      return sessionCountry;
-    }
+    if (sessionCountry?.countryName && sessionCountry.countryName !== 'Unknown') return sessionCountry;
     if (fallbackProfile?.countryName && fallbackProfile.countryName !== 'Unknown') {
-      return {
-        countryCode: fallbackProfile.countryCode || null,
-        countryName: fallbackProfile.countryName,
-        countryFlag: fallbackProfile.countryFlag || '🌐',
-      };
+      return { countryCode: fallbackProfile.countryCode || null, countryName: fallbackProfile.countryName, countryFlag: fallbackProfile.countryFlag || '🌐' };
     }
-    return {
-      countryCode: null,
-      countryName: 'Unknown',
-      countryFlag: '🌐',
-    };
+    return { countryCode: null, countryName: 'Unknown', countryFlag: '🌐' };
   }
 
   function regionCodeToFlag(regionCode) {
     if (!regionCode || regionCode.length !== 2) return '🌐';
-    return regionCode
-      .toUpperCase()
-      .split('')
-      .map(char => String.fromCodePoint(127397 + char.charCodeAt(0)))
-      .join('');
+    return regionCode.toUpperCase().split('').map(char => String.fromCodePoint(127397 + char.charCodeAt(0))).join('');
   }
 
   function countryNameFromRegion(regionCode) {
     if (!regionCode) return 'Unknown';
-    try {
-      const display = new Intl.DisplayNames(['en'], { type: 'region' });
-      return display.of(regionCode.toUpperCase()) || regionCode.toUpperCase();
-    } catch (e) {
-      return regionCode.toUpperCase();
-    }
-  }
-
-  function deriveCountry(primaryLanguage) {
-    const code = primaryLanguage?.code;
-    const region = typeof code === 'string' && code.includes('-')
-      ? code.split('-')[1].toUpperCase()
-      : null;
-
-    return {
-      countryCode: region,
-      countryName: countryNameFromRegion(region),
-      countryFlag: primaryLanguage?.flag || regionCodeToFlag(region),
-    };
+    try { const display = new Intl.DisplayNames(['en'], { type: 'region' }); return display.of(regionCode.toUpperCase()) || regionCode.toUpperCase(); }
+    catch { return regionCode.toUpperCase(); }
   }
 
   function getSessionLanguageMap(session) {
@@ -802,12 +621,7 @@ app.prepare().then(() => {
     const all = [session?.primaryLanguage, ...(session?.spokenLanguages || [])];
     for (const lang of all) {
       if (!lang?.code) continue;
-      if (!map.has(lang.code)) {
-        map.set(lang.code, {
-          code: lang.code,
-          name: lang.name || lang.code,
-        });
-      }
+      if (!map.has(lang.code)) map.set(lang.code, { code: lang.code, name: lang.name || lang.code });
     }
     return map;
   }
@@ -816,30 +630,22 @@ app.prepare().then(() => {
     const aMap = getSessionLanguageMap(sessionA);
     const bMap = getSessionLanguageMap(sessionB);
     const common = [];
-    for (const [code, lang] of aMap.entries()) {
-      if (bMap.has(code)) common.push(lang);
-    }
+    for (const [code, lang] of aMap.entries()) { if (bMap.has(code)) common.push(lang); }
     return common.slice(0, 5);
   }
 
   function addOnlineSocket(anonUserId, socketId) {
     if (!anonUserId) return;
-    if (!onlineUsers.has(anonUserId)) {
-      onlineUsers.set(anonUserId, new Set());
-    }
+    if (!onlineUsers.has(anonUserId)) onlineUsers.set(anonUserId, new Set());
     onlineUsers.get(anonUserId).add(socketId);
-
-    queueBackground(setPresence(anonUserId, [...onlineUsers.get(anonUserId)]), '[Redis] Failed to sync presence add');
+    queueBackground(setPresence(anonUserId, [...onlineUsers.get(anonUserId)]), '[Redis] Failed to sync presence');
   }
 
   function removeOnlineSocket(anonUserId, socketId) {
     if (!anonUserId || !onlineUsers.has(anonUserId)) return;
     const sockets = onlineUsers.get(anonUserId);
     sockets.delete(socketId);
-    if (sockets.size === 0) {
-      onlineUsers.delete(anonUserId);
-    }
-
+    if (sockets.size === 0) onlineUsers.delete(anonUserId);
     queueBackground(setPresence(anonUserId, [...sockets]), '[Redis] Failed to sync presence remove');
   }
 
@@ -850,37 +656,21 @@ app.prepare().then(() => {
   function getOnlineSocketIdForUser(anonUserId) {
     const socketIds = getLiveSocketIds(anonUserId);
     if (!socketIds.length) return null;
-    for (const sid of socketIds) {
-      if (userSessions.has(sid)) return sid;
-    }
+    for (const sid of socketIds) { if (userSessions.has(sid)) return sid; }
     return null;
   }
 
   function ensureFriendSet(anonUserId) {
-    if (!friendsByUser.has(anonUserId)) {
-      friendsByUser.set(anonUserId, new Set());
-    }
+    if (!friendsByUser.has(anonUserId)) friendsByUser.set(anonUserId, new Set());
     return friendsByUser.get(anonUserId);
-  }
-
-  function addFriendship(a, b) {
-    if (!a || !b || a === b) return false;
-    const setA = ensureFriendSet(a);
-    const setB = ensureFriendSet(b);
-    const beforeA = setA.size;
-    setA.add(b);
-    setB.add(a);
-    return setA.size !== beforeA;
   }
 
   async function getFriendsPayload(identityId) {
     const friends = await socialStore.listFriends(identityId);
     return friends.map(friend => ({
-      friendAnonId: friend.friendUserId,
-      friendUserId: friend.friendUserId,
+      friendAnonId: friend.friendUserId, friendUserId: friend.friendUserId,
       online: isUserOnline(friend.friendUserId),
-      countryName: friend.countryName || 'Unknown',
-      countryFlag: friend.countryFlag || '🌐',
+      countryName: friend.countryName || 'Unknown', countryFlag: friend.countryFlag || '🌐',
       name: friend.name || `User ${String(friend.friendUserId || '').slice(-4)}`,
       image: friend.image || null,
     }));
@@ -891,6 +681,9 @@ app.prepare().then(() => {
     const payload = await getFriendsPayload(identityId);
     const socketIds = getLiveSocketIds(identityId);
     for (const sid of socketIds) {
+      // Don't send social data to guests
+      const session = userSessions.get(sid);
+      if (session?.isGuest) continue;
       io.to(sid).emit('friends-status', { friends: payload });
     }
   }
@@ -901,6 +694,8 @@ app.prepare().then(() => {
     const outgoing = await socialStore.listOutgoingRequests(identityId);
     const socketIds = getLiveSocketIds(identityId);
     for (const sid of socketIds) {
+      const session = userSessions.get(sid);
+      if (session?.isGuest) continue;
       io.to(sid).emit('friend-requests', { incoming, outgoing });
     }
   }
@@ -910,12 +705,19 @@ app.prepare().then(() => {
     const history = await socialStore.listHistory(identityId);
     const socketIds = getLiveSocketIds(identityId);
     for (const sid of socketIds) {
+      const session = userSessions.get(sid);
+      if (session?.isGuest) continue;
       io.to(sid).emit('history-updated', { history });
     }
   }
 
   async function refreshSocialViews(identityId) {
     if (!identityId) return;
+    // Skip social view refresh for guests — they have no social data
+    const socketIds = getLiveSocketIds(identityId);
+    const isGuestIdentity = socketIds.some(sid => userSessions.get(sid)?.isGuest);
+    if (isGuestIdentity) return;
+
     await emitFriendsStatus(identityId);
     await emitFriendRequests(identityId);
     await emitHistory(identityId);
@@ -930,17 +732,18 @@ app.prepare().then(() => {
 
   async function notifyFriendsOnlineStatusChanged(identityId) {
     if (!identityId) return;
+    // Guests don't participate in friend online status
+    const socketIds = getLiveSocketIds(identityId);
+    const isGuestIdentity = socketIds.some(sid => userSessions.get(sid)?.isGuest);
+    if (isGuestIdentity) return;
+
     const friends = await socialStore.listFriends(identityId);
     const online = isUserOnline(identityId);
     for (const friend of friends) {
-      const socketIds = getLiveSocketIds(friend.friendUserId);
-      if (!socketIds.length) continue;
-      for (const sid of socketIds) {
-        io.to(sid).emit('friend-online-status', {
-          friendAnonId: identityId,
-          friendUserId: identityId,
-          online,
-        });
+      const fSocketIds = getLiveSocketIds(friend.friendUserId);
+      if (!fSocketIds.length) continue;
+      for (const sid of fSocketIds) {
+        io.to(sid).emit('friend-online-status', { friendAnonId: identityId, friendUserId: identityId, online });
       }
     }
   }
@@ -948,30 +751,16 @@ app.prepare().then(() => {
   async function emitMatchedPair(socketIdA, sessionA, socketIdB, sessionB, options = {}) {
     const roomId = options.roomId || generateId();
     const resolvedMode = normalizeMode(options.mode || sessionA.mode || sessionB.mode);
-    // Strict mode guard: both sessions AND the requested mode must all agree.
-    // This is the single authoritative check — every caller relies on it.
     const modeA = normalizeMode(sessionA.mode);
     const modeB = normalizeMode(sessionB.mode);
     if (modeA !== resolvedMode || modeB !== resolvedMode || modeA !== modeB) {
-      logWarn('[Match] Mode mismatch — refusing to pair:', { modeA, modeB, resolvedMode, socketIdA, socketIdB });
+      logWarn('[Match] Mode mismatch — refusing to pair');
       return null;
     }
     const matchedInterests = getMatchedInterests(sessionA.interests || [], sessionB.interests || []);
 
-    rooms.set(roomId, {
-      user1: socketIdA,
-      user2: socketIdB,
-      mode: resolvedMode,
-      startedAt: new Date(),
-      viaFriend: !!options.viaFriend,
-      matchedInterests,
-    });
-
-    roomActions.set(roomId, {
-      likes: new Set(),
-      reports: new Set(),
-    });
-
+    rooms.set(roomId, { user1: socketIdA, user2: socketIdB, mode: resolvedMode, startedAt: new Date(), viaFriend: !!options.viaFriend, matchedInterests });
+    roomActions.set(roomId, { likes: new Set(), reports: new Set() });
     sessionA.roomId = roomId;
     sessionB.roomId = roomId;
 
@@ -980,45 +769,35 @@ app.prepare().then(() => {
     const commonLanguages = getCommonLanguages(sessionA, sessionB);
 
     io.to(socketIdA).emit('matched', {
-      roomId,
-      partnerId: socketIdB,
+      roomId, partnerId: socketIdB,
       partnerUserId: getIdentityId(sessionB),
       partnerProfile: buildProfileSnapshot(sessionB),
       partnerLanguage: sessionB.primaryLanguage,
       partnerCountry: resolveCountryPayload(sessionB.country, userProfiles.get(getIdentityId(sessionB))),
-      partnerLikes: repB.likesReceived,
-      mode: resolvedMode,
-      commonLanguages,
-      matchedInterests,
-      isFriendConnection: !!options.viaFriend,
-      isInitiator: true,
+      partnerLikes: sessionB.isGuest ? 0 : repB.likesReceived,
+      mode: resolvedMode, commonLanguages, matchedInterests,
+      isFriendConnection: !!options.viaFriend, isInitiator: true,
     });
 
     io.to(socketIdB).emit('matched', {
-      roomId,
-      partnerId: socketIdA,
+      roomId, partnerId: socketIdA,
       partnerUserId: getIdentityId(sessionA),
       partnerProfile: buildProfileSnapshot(sessionA),
       partnerLanguage: sessionA.primaryLanguage,
       partnerCountry: resolveCountryPayload(sessionA.country, userProfiles.get(getIdentityId(sessionA))),
-      partnerLikes: repA.likesReceived,
-      mode: resolvedMode,
-      commonLanguages,
-      matchedInterests,
-      isFriendConnection: !!options.viaFriend,
-      isInitiator: false,
+      partnerLikes: sessionA.isGuest ? 0 : repA.likesReceived,
+      mode: resolvedMode, commonLanguages, matchedInterests,
+      isFriendConnection: !!options.viaFriend, isInitiator: false,
     });
 
-    socialStore.recordMatchHistoryForUsers(buildProfileSnapshot(sessionA), buildProfileSnapshot(sessionB), {
-      roomId,
-      mode: resolvedMode,
-      connectedAt: new Date(),
-    }).catch((error) => {
-      console.error('[History] Failed to persist match history:', error?.message || error);
-    });
+    // Only record history for non-guest sessions
+    if (!sessionA.isGuest || !sessionB.isGuest) {
+      socialStore.recordMatchHistoryForUsers(buildProfileSnapshot(sessionA), buildProfileSnapshot(sessionB), {
+        roomId, mode: resolvedMode, connectedAt: new Date(),
+      }).catch(() => {});
+    }
 
     syncRoomSnapshot(roomId);
-
     return roomId;
   }
 
@@ -1049,21 +828,54 @@ app.prepare().then(() => {
     await removeFromRedisQueue(socketId);
   }
 
+  // ── Socket auth middleware ──────────────────────────────────────────────────
   io.use(async (socket, next) => {
     try {
+      const clientIp = getClientIp(socket.handshake);
+
+      // IP ban check
+      if (isIpBanned(clientIp)) {
+        return next(new Error('Too many connections'));
+      }
+
       const cookies = parseCookies(socket.handshake.headers.cookie || '');
+
+      // Try Google/OAuth session first
       const sessionId = cookies.omingle_session;
-      socket.data.authUser = await socialStore.getUserBySessionId(sessionId);
+      let authUser = null;
+      try {
+        authUser = sessionId ? await socialStore.getUserBySessionId(sessionId) : null;
+      } catch {
+        authUser = null;
+      }
+
+      socket.data.authUser = authUser;
+      socket.data.clientIp = clientIp;
+
+      // If no OAuth session, check for guest cookie
+      if (!authUser) {
+        const guestId = cookies.hippichat_guest_id;
+        if (isValidGuestId(guestId)) {
+          socket.data.isGuest = true;
+          socket.data.guestId = guestId;
+        } else {
+          socket.data.isGuest = false;
+        }
+      } else {
+        socket.data.isGuest = false;
+      }
+
       return next();
-    } catch (error) {
-      console.error('[SocketAuth] Failed to resolve authenticated session:', error?.message || error);
+    } catch {
       socket.data.authUser = null;
+      socket.data.isGuest = false;
       return next();
     }
   });
 
   io.on('connection', (socket) => {
-    logDebug('[Socket] Connected:', socket.id);
+    const clientIp = socket.data?.clientIp || 'unknown';
+    trackIpConnection(clientIp, 1);
 
     connectedCount += 1;
     queueBackground((async () => {
@@ -1073,97 +885,93 @@ app.prepare().then(() => {
     queueBackground(broadcastStats(), '[Stats] Failed to broadcast on connect');
 
     socket.on('identify-user', async (data = {}) => {
-      const existing = userSessions.get(socket.id) || { socketId: socket.id, spokenLanguages: [], roomId: null }
-      const previousIdentityId = getIdentityId(existing)
-      const authUser = socket.data?.authUser || null
+      const existing = userSessions.get(socket.id) || { socketId: socket.id, spokenLanguages: [], roomId: null };
+      const previousIdentityId = getIdentityId(existing);
+      const authUser = socket.data?.authUser || null;
+      const isGuest = !authUser && (socket.data?.isGuest || false);
+
+      const guestAnonId = socket.data?.guestId || null;
 
       const session = {
         ...existing,
         socketId: socket.id,
-        anonUserId: data.anonUserId || existing.anonUserId || `guest_${socket.id}`,
-        userId: authUser?.id || existing.userId || null,
-        displayName: authUser?.name || existing.displayName || null,
-        email: authUser?.email || existing.email || '',
-        image: authUser?.image || existing.image || null,
+        isGuest,
+        // For guests: use their persistent guest cookie ID as the anonUserId
+        anonUserId: isGuest
+          ? (guestAnonId || data.anonUserId || `guest_${socket.id}`)
+          : (data.anonUserId || existing.anonUserId || `guest_${socket.id}`),
+        userId: isGuest ? null : (authUser?.id || existing.userId || null),
+        displayName: isGuest ? null : (authUser?.name || existing.displayName || null),
+        email: isGuest ? '' : (authUser?.email || existing.email || ''),
+        image: isGuest ? null : (authUser?.image || existing.image || null),
         country: data.country?.countryName ? data.country : existing.country || null,
         joinedAt: existing.joinedAt || new Date(),
+      };
+
+      userSessions.set(socket.id, session);
+      const identityId = getIdentityId(session);
+      if (!identityId) return;
+
+      session.country = resolveCountryPayload(session.country, userProfiles.get(identityId));
+      userSessions.set(socket.id, session);
+
+      await enforceSingleActiveSocket(identityId, socket.id);
+
+      if (previousIdentityId && previousIdentityId !== identityId) removeOnlineSocket(previousIdentityId, socket.id);
+      addOnlineSocket(identityId, socket.id);
+
+      if (!isGuest) {
+        queueBackground(getReputationSnapshot(identityId), '[Reputation] Failed to load reputation');
+        const storedProfile = {
+          userId: identityId,
+          name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
+          email: session.email || '', image: session.image || null,
+          countryCode: session.country?.countryCode || null,
+          countryName: session.country?.countryName || 'Unknown',
+          countryFlag: session.country?.countryFlag || '🌐',
+          lastSeen: new Date(),
+        };
+        userProfiles.set(identityId, storedProfile);
+        queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert profile');
+        queueBackground(refreshSocialViews(identityId), '[Social] Failed to refresh social views');
+        queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friends');
       }
-
-      userSessions.set(socket.id, session)
-
-      const identityId = getIdentityId(session)
-      if (!identityId) return
-
-      session.country = resolveCountryPayload(session.country, userProfiles.get(identityId))
-      userSessions.set(socket.id, session)
-
-      await enforceSingleActiveSocket(identityId, socket.id)
-
-      if (previousIdentityId && previousIdentityId !== identityId) {
-        removeOnlineSocket(previousIdentityId, socket.id)
-      }
-
-      addOnlineSocket(identityId, socket.id)
-      queueBackground(getReputationSnapshot(identityId), '[Reputation] Failed to load queue reputation')
-
-      const storedProfile = {
-        userId: identityId,
-        name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
-        email: session.email || '',
-        image: session.image || null,
-        countryCode: session.country?.countryCode || null,
-        countryName: session.country?.countryName || 'Unknown',
-        countryFlag: session.country?.countryFlag || '🌐',
-        lastSeen: new Date(),
-      }
-
-      userProfiles.set(identityId, storedProfile)
-      queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert identified profile')
-      queueBackground(refreshSocialViews(identityId), '[Social] Failed to refresh identified social views')
-      queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friend online status change')
-    })
+    });
 
     socket.on('join-queue', async (data) => {
       const { primaryLanguage, spokenLanguages, mode, anonUserId, country, interestKeywords } = data;
       const requestedMode = normalizeMode(mode);
-      logDebug('[Socket] join-queue:', socket.id, requestedMode, primaryLanguage?.code);
-      const authUser = socket.data?.authUser || null
+      const authUser = socket.data?.authUser || null;
+      const isGuest = !authUser && (socket.data?.isGuest || false);
+      const guestAnonId = socket.data?.guestId || null;
 
-      // Issue a fresh token for this join attempt.  If a newer join-queue event
-      // arrives for the same socket while this one is suspended at an await, the
-      // token will differ and we bail out — preventing two coroutines from
-      // writing to Redis concurrently and leaving the socket in the wrong mode set.
       const joinToken = generateId();
       joinQueueTokens.set(socket.id, joinToken);
       const isThisJoinCurrent = () => joinQueueTokens.get(socket.id) === joinToken;
 
-      // Clean up any existing room/queue membership AND check moderation in parallel
+      const effectiveIdentityId = isGuest
+        ? (guestAnonId || anonUserId || `guest_${socket.id}`)
+        : (authUser?.id || anonUserId || `guest_${socket.id}`);
+
       const [, , moderationBlock] = await Promise.all([
         leaveRoom(socket),
         removeFromQueue(socket.id),
-        getModerationBlock(getIdentityId({
-          userId: (socket.data?.authUser || null)?.id || null,
-          anonUserId: anonUserId || `guest_${socket.id}`,
-          socketId: socket.id,
-        })),
+        getModerationBlock(effectiveIdentityId),
       ]);
 
-      // Abort if a newer join-queue already superseded this one
-      if (!isThisJoinCurrent()) {
-        logDebug('[JoinQueue] Superseded after cleanup, aborting', socket.id);
-        return;
-      }
+      if (!isThisJoinCurrent()) return;
 
       const session = {
         socketId: socket.id,
+        isGuest,
         primaryLanguage,
         spokenLanguages: spokenLanguages || [],
         mode: requestedMode,
-        anonUserId: anonUserId || `guest_${socket.id}`,
-        userId: authUser?.id || null,
-        displayName: authUser?.name || null,
-        email: authUser?.email || '',
-        image: authUser?.image || null,
+        anonUserId: isGuest ? (guestAnonId || anonUserId || `guest_${socket.id}`) : (anonUserId || `guest_${socket.id}`),
+        userId: isGuest ? null : (authUser?.id || null),
+        displayName: isGuest ? null : (authUser?.name || null),
+        email: isGuest ? '' : (authUser?.email || ''),
+        image: isGuest ? null : (authUser?.image || null),
         country: country?.countryName ? country : { countryCode: null, countryName: 'Unknown', countryFlag: '🌐' },
         interests: normalizeInterestKeywords(interestKeywords),
         roomId: null,
@@ -1175,62 +983,54 @@ app.prepare().then(() => {
       session.inQueue = true;
       userSessions.set(socket.id, session);
 
-      // moderationBlock was already fetched in parallel with leaveRoom/removeFromQueue above
       if (moderationBlock?.blockedUntil) {
-        socket.emit('account-blocked', {
-          ...moderationBlock,
-          message: formatBlockMessage(moderationBlock),
-        });
+        socket.emit('account-blocked', { ...moderationBlock, message: formatBlockMessage(moderationBlock) });
         return;
       }
 
-      queueBackground(getReputationSnapshot(identityId), '[Reputation] Failed to load session reputation');
+      // Rate limit guests more aggressively on join-queue
+      if (isGuest) {
+        const guestQueueKey = `hippichat:rate:guest-queue:${identityId}`;
+        const allowed = await redis.checkRateLimit(guestQueueKey, 30, 60).catch(() => true);
+        if (!allowed) {
+          socket.emit('account-blocked', { message: 'Too many attempts. Please wait a moment.' });
+          return;
+        }
+      }
+
       addOnlineSocket(identityId, socket.id);
-      const storedProfile = {
-        userId: identityId,
-        name: authUser?.name || session.displayName || `User ${String(identityId || '').slice(-4)}`,
-        email: session.email || '',
-        image: session.image || null,
-        countryCode: session.country?.countryCode || null,
-        countryName: session.country?.countryName || 'Unknown',
-        countryFlag: session.country?.countryFlag || '🌐',
-        lastSeen: new Date(),
-      };
-      userProfiles.set(identityId, storedProfile);
-      queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert queue profile');
-      queueBackground(emitFriendsStatus(identityId), '[Social] Failed to emit friends status');
-      queueBackground(emitFriendRequests(identityId), '[Social] Failed to emit friend requests');
-      queueBackground(emitHistory(identityId), '[Social] Failed to emit history');
-      queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friends online status');
 
-      logDebug('[Socket] Queue candidate ready:', { socketId: socket.id, mode: session.mode });
+      if (!isGuest) {
+        const storedProfile = {
+          userId: identityId, name: authUser?.name || `User ${String(identityId || '').slice(-4)}`,
+          email: session.email || '', image: session.image || null,
+          countryCode: session.country?.countryCode || null,
+          countryName: session.country?.countryName || 'Unknown',
+          countryFlag: session.country?.countryFlag || '🌐',
+          lastSeen: new Date(),
+        };
+        userProfiles.set(identityId, storedProfile);
+        queueBackground(socialStore.upsertUserProfile(storedProfile), '[Profile] Failed to upsert queue profile');
+        queueBackground(emitFriendsStatus(identityId), '[Social] Failed to emit friends status');
+        queueBackground(emitFriendRequests(identityId), '[Social] Failed to emit friend requests');
+        queueBackground(emitHistory(identityId), '[Social] Failed to emit history');
+        queueBackground(notifyFriendsOnlineStatusChanged(identityId), '[Social] Failed to notify friends online status');
+      }
 
-      // ── KEY FIX: Add self to Redis queue BEFORE scanning for a match.
-      // This ensures both users are visible to each other during concurrent joins.
       await addToRedisQueue(session);
 
-      // Second token check: if a newer join-queue wrote its own entry to Redis
-      // after ours, our write may have overwritten the correct one.  Clean up and
-      // yield to the newer coroutine which is already running.
       if (!isThisJoinCurrent()) {
-        logDebug('[JoinQueue] Superseded after addToRedisQueue, removing stale entry', socket.id);
         await removeFromRedisQueue(socket.id);
         return;
       }
 
-      // Try to find and atomically claim a waiting match
+      // Continuation of join-queue handler
       let match = await findMatch(socket.id, session.mode, session.interests);
 
-      // Retry with brief delays to handle simultaneous-join race conditions.
-      // When two users join at the same moment, Redis lock contention can cause
-      // one side's findMatch to return null even though the other user IS in queue.
-      // The other side will have already emitted a 'matched' event in that case
-      // (session.roomId gets set), so we stop retrying if already matched.
       if (!match) {
         for (const delayMs of [250, 500]) {
           await new Promise(r => setTimeout(r, delayMs));
           const currentSession = userSessions.get(socket.id);
-          // Stop if disconnected, left queue, or already matched by the other side
           if (!currentSession?.inQueue || currentSession?.roomId) break;
           match = await findMatch(socket.id, session.mode, session.interests);
           if (match) break;
@@ -1240,75 +1040,45 @@ app.prepare().then(() => {
       if (match) {
         const matchSession = userSessions.get(match.socketId);
         if (!matchSession) {
-          // Match candidate disconnected after being claimed — stay in queue
-          // (our own entry was already removed by findAndClaimFromRedisQueue,
-          //  so re-add ourselves)
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
-          socket.emit('queue-status', {
-            position: queueLength,
-            queueLength,
-            interests: session.interests,
-          });
+          socket.emit('queue-status', { position: queueLength, queueLength, interests: session.interests });
           queueBackground(broadcastStats(), '[Stats] Failed to broadcast after stale match');
           return;
         }
 
         if (normalizeMode(matchSession.mode) !== session.mode) {
-          // Mode mismatch after claiming — return both users to their own queues.
-          // Re-add the match candidate first so they aren't stranded.
           matchSession.inQueue = true;
           await addToRedisQueue(matchSession);
           session.inQueue = true;
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
-          socket.emit('queue-status', {
-            position: queueLength,
-            queueLength,
-            interests: session.interests,
-          });
+          socket.emit('queue-status', { position: queueLength, queueLength, interests: session.interests });
           queueBackground(broadcastStats(), '[Stats] Failed to broadcast after mode mismatch');
           return;
         }
 
-        const roomId = await emitMatchedPair(match.socketId, matchSession, socket.id, session, {
-          mode: session.mode,
-        });
+        const roomId = await emitMatchedPair(match.socketId, matchSession, socket.id, session, { mode: session.mode });
 
         if (!roomId) {
-          // emitMatchedPair rejected (e.g., mode guard) — put both back
           await addToRedisQueue(matchSession);
           await addToRedisQueue(session);
           const queueLength = await getRedisQueueLength().catch(() => 0);
-          socket.emit('queue-status', {
-            position: queueLength,
-            queueLength,
-            interests: session.interests,
-          });
+          socket.emit('queue-status', { position: queueLength, queueLength, interests: session.interests });
           queueBackground(broadcastStats(), '[Stats] Failed to broadcast after failed match');
           return;
         }
 
-        logDebug('[Socket] Matched:', match.socketId, '<->', socket.id, 'Room:', roomId);
         queueBackground(broadcastStats(), '[Stats] Failed to broadcast after match');
       } else {
-        // No match yet — stay in queue (already added above)
         const queueLength = await getRedisQueueLength().catch(() => 0);
-        socket.emit('queue-status', {
-          position: queueLength,
-          queueLength,
-          interests: session.interests,
-        });
-        logDebug('[Socket] Waiting in queue. Queue size:', queueLength);
-        logRuntimeStats('queue-add');
+        socket.emit('queue-status', { position: queueLength, queueLength, interests: session.interests });
         queueBackground(broadcastStats(), '[Stats] Failed to broadcast after queue add');
       }
     });
 
     socket.on('leave-queue', async () => {
-      logDebug('[Socket] leave-queue:', socket.id);
       await removeFromQueue(socket.id);
-
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after leave-queue');
     });
 
@@ -1317,25 +1087,21 @@ app.prepare().then(() => {
       const signalType = sanitizeString(data?.type, 32);
       if (!targetSocketId || !signalType) return;
       if (!isSocketInSameRoom(socket.id, targetSocketId)) return;
-
       io.to(targetSocketId).emit('signal', {
-        type: signalType,
-        from: socket.id,
-        to: targetSocketId,
-        payload: data?.payload,
+        type: signalType, from: socket.id, to: targetSocketId, payload: data?.payload,
       });
     });
 
     socket.on('send-message', async (data) => {
       try {
-        const allowed = await redis.checkRateLimit(`hippichat:rate:message:${socket.id}`, 40, 15);
-        if (!allowed) {
-          socket.emit('action-feedback', { type: 'message', status: 'rate-limited' });
-          return;
-        }
-      } catch (error) {
-        logWarn('[Redis] Message rate-limit warning', error?.message || error);
-      }
+        const session = userSessions.get(socket.id);
+        const identityId = getIdentityId(session);
+        // Rate limit: guests get stricter limits
+        const limit = session?.isGuest ? 20 : 40;
+        const allowed = await redis.checkRateLimit(`hippichat:rate:message:${socket.id}`, limit, 15);
+        if (!allowed) { socket.emit('action-feedback', { type: 'message', status: 'rate-limited' }); return; }
+      } catch {}
+
       const session = userSessions.get(socket.id);
       if (!session || !session.roomId) return;
       const room = rooms.get(session.roomId);
@@ -1345,75 +1111,37 @@ app.prepare().then(() => {
       if (!safeMessage) return;
       const partnerId = room.user1 === socket.id ? room.user2 : room.user1;
       io.to(partnerId).emit('receive-message', {
-        id: generateId(),
-        text: safeMessage,
-        fromLang: safeFromLang,
-        timestamp: new Date().toISOString(),
+        id: generateId(), text: safeMessage, fromLang: safeFromLang, timestamp: new Date().toISOString(),
       });
     });
 
     socket.on('update-profile', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       const authUser = requireAuthenticatedUser(socket, 'profile');
       if (!authUser) return;
 
       const identityId = getIdentityId(session);
       const nextName = sanitizeString(data?.name, MAX_PROFILE_NAME_LENGTH) || '';
       const nextCustomImage = sanitizeImageUrl(data?.customImage);
-      if (nextCustomImage === null) {
-        socket.emit('action-feedback', { type: 'profile', status: 'invalid-image-url' });
-        return;
-      }
+      if (nextCustomImage === null) { socket.emit('action-feedback', { type: 'profile', status: 'invalid-image-url' }); return; }
       if (!identityId || (!nextName && typeof nextCustomImage === 'undefined')) return;
 
-      if (nextName) {
-        session.displayName = nextName;
-      }
-      if (typeof nextCustomImage !== 'undefined') {
-        session.image = nextCustomImage || authUser?.image || null;
-      }
+      if (nextName) session.displayName = nextName;
+      if (typeof nextCustomImage !== 'undefined') session.image = nextCustomImage || authUser?.image || null;
       userSessions.set(socket.id, session);
 
       const nextProfile = {
-        userId: identityId,
-        name: nextName || session.displayName,
-        email: session.email || '',
+        userId: identityId, name: nextName || session.displayName, email: session.email || '',
         image: session.image || null,
         customImage: typeof nextCustomImage !== 'undefined' ? (nextCustomImage || null) : (userProfiles.get(identityId)?.customImage || null),
-        countryName: session.country?.countryName || 'Unknown',
-        countryFlag: session.country?.countryFlag || '🌐',
-        lastSeen: new Date(),
+        countryName: session.country?.countryName || 'Unknown', countryFlag: session.country?.countryFlag || '🌐', lastSeen: new Date(),
       };
 
-      socket.data.authUser = {
-        ...authUser,
-        name: nextName || authUser?.name,
-        image: session.image || authUser?.image || null,
-      };
-
+      socket.data.authUser = { ...authUser, name: nextName || authUser?.name, image: session.image || authUser?.image || null };
       userProfiles.set(identityId, nextProfile);
       await socialStore.upsertUserProfile(nextProfile);
       await refreshSocialViews(identityId);
-    });
-
-    socket.on('translation-ready', (data) => {
-      const session = userSessions.get(socket.id);
-      if (!session || !session.roomId) return;
-      const room = rooms.get(session.roomId);
-      if (!room) return;
-      const partnerId = getRoomPartnerId(room, socket.id);
-      const safeText = sanitizeString(data?.text, MAX_CHAT_MESSAGE_LENGTH);
-      const safeOriginalText = sanitizeString(data?.originalText, MAX_CHAT_MESSAGE_LENGTH);
-      const safeFromLang = sanitizeString(data?.fromLang, 32) || null;
-      const safeToLang = sanitizeString(data?.toLang, 32) || null;
-      if (!safeText) return;
-      io.to(partnerId).emit('translation-ready', {
-        text: safeText,
-        originalText: safeOriginalText,
-        fromLang: safeFromLang,
-        toLang: safeToLang,
-      });
     });
 
     socket.on('like-partner', async () => {
@@ -1425,11 +1153,7 @@ app.prepare().then(() => {
       const actorAnon = getIdentityId(session);
       const actions = roomActions.get(session.roomId) || { likes: new Set(), reports: new Set() };
 
-      if (actions.likes.has(actorAnon)) {
-        socket.emit('action-feedback', { type: 'like', status: 'duplicate' });
-        return;
-      }
-
+      if (actions.likes.has(actorAnon)) { socket.emit('action-feedback', { type: 'like', status: 'duplicate' }); return; }
       actions.likes.add(actorAnon);
       roomActions.set(session.roomId, actions);
 
@@ -1437,14 +1161,20 @@ app.prepare().then(() => {
       const partnerSession = userSessions.get(partnerId);
       if (!partnerSession) return;
 
+      // Guests can like, but their partner doesn't receive the like notification
+      // (and guests themselves don't accumulate likes in reputation)
       const partnerAnon = getIdentityId(partnerSession);
-      const partnerRep = await incrementReputation(partnerAnon, { likesReceived: 1 });
 
-      // Update liker's view of partner likes
-      socket.emit('partner-likes-updated', { likes: partnerRep.likesReceived });
+      if (!partnerSession.isGuest) {
+        // Only increment reputation for non-guest recipients
+        const partnerRep = await incrementReputation(partnerAnon, { likesReceived: 1 });
+        socket.emit('partner-likes-updated', { likes: partnerRep.likesReceived });
+        io.to(partnerId).emit('received-like', { totalLikes: partnerRep.likesReceived });
+      } else {
+        // Partner is a guest — still show the like-updated count locally but don't persist
+        socket.emit('partner-likes-updated', { likes: 0 });
+      }
 
-      // Notify partner they received appreciation
-      io.to(partnerId).emit('received-like', { totalLikes: partnerRep.likesReceived });
       socket.emit('action-feedback', { type: 'like', status: 'ok' });
     });
 
@@ -1460,20 +1190,14 @@ app.prepare().then(() => {
       const reason = sanitizeString(data?.reason, 40) || 'other';
       const details = sanitizeString(data?.details, MAX_REPORT_DETAILS_LENGTH) || '';
 
-      if (effectiveRoomId && actions.reports.has(actorAnon)) {
-        socket.emit('action-feedback', { type: 'report', status: 'duplicate' });
-        return;
-      }
-
-      if (effectiveRoomId) {
-        actions.reports.add(actorAnon);
-        roomActions.set(effectiveRoomId, actions);
-      }
+      if (effectiveRoomId && actions.reports.has(actorAnon)) { socket.emit('action-feedback', { type: 'report', status: 'duplicate' }); return; }
+      if (effectiveRoomId) { actions.reports.add(actorAnon); roomActions.set(effectiveRoomId, actions); }
 
       const partnerId = room ? getRoomPartnerId(room, socket.id) : null;
       const partnerSession = partnerId ? userSessions.get(partnerId) : null;
       const partnerAnon = explicitReportedId || (partnerSession ? getIdentityId(partnerSession) : (partnerId ? `guest_${partnerId}` : null));
       if (!partnerAnon) return;
+
       const partnerRep = await incrementReputation(partnerAnon, { reportsReceived: 1 });
 
       queueBackground((async () => {
@@ -1482,36 +1206,25 @@ app.prepare().then(() => {
         if (!alreadyCounted) {
           await redis.setJson(dedupeKey, true, 60 * 60 * 24).catch(() => null);
           const blockPayload = await applyModerationThreshold(partnerAnon, reason);
-          if (blockPayload) {
-            disconnectUserSockets(partnerAnon, blockPayload);
-          }
+          if (blockPayload) disconnectUserSockets(partnerAnon, blockPayload);
         }
-
         await socialStore.createReport({
-          reporterId: actorAnon,
-          reportedId: partnerAnon,
-          roomId: effectiveRoomId,
-          reason,
-          details,
+          reporterId: actorAnon, reportedId: partnerAnon, roomId: effectiveRoomId,
+          reason, details,
           reporterProfile: buildProfileSnapshot(session),
           reportedProfile: partnerSession ? buildProfileSnapshot(partnerSession) : null,
         });
-      })(), '[Moderation] Failed to persist report or apply moderation threshold');
+      })(), '[Moderation] Failed to persist report');
 
-      logDebug('[Socket] report-partner:', { reporter: socket.id, roomId: effectiveRoomId, reason, reportsReceived: partnerRep.reportsReceived });
-
-      if (room && session.roomId) {
-        await leaveRoom(socket);
-        socket.emit('partner-left');
-      }
-
+      if (room && session.roomId) { await leaveRoom(socket); socket.emit('partner-left'); }
       socket.emit('action-feedback', { type: 'report', status: 'ok' });
       socket.emit('report-submitted', { ok: true });
     });
 
+    // Social features — block guests from all friend/social socket actions
     socket.on('send-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) { socket.emit('action-feedback', { type: 'friend-request', status: 'unauthorized' }); return; }
       if (!requireAuthenticatedUser(socket, 'friend-request')) return;
 
       const requesterId = getIdentityId(session);
@@ -1522,143 +1235,94 @@ app.prepare().then(() => {
         if (room) {
           const partnerId = getRoomPartnerId(room, socket.id);
           const partnerSession = userSessions.get(partnerId);
+          if (partnerSession?.isGuest) { socket.emit('action-feedback', { type: 'friend-request', status: 'guest-not-supported' }); return; }
           recipientId = getIdentityId(partnerSession);
         }
       }
-
       if (!requesterId || !recipientId) return;
 
-      const allowed = await redis.checkRateLimit(`hippichat:rate:friend-request:${requesterId}`, 10, 60).catch((error) => {
-        console.error('[Redis] Friend request rate-limit failed:', error?.message || error);
-        return true;
-      });
-      if (!allowed) {
-        socket.emit('action-feedback', { type: 'friend-request', status: 'rate-limited' });
-        return;
-      }
+      const allowed = await redis.checkRateLimit(`hippichat:rate:friend-request:${requesterId}`, 10, 60).catch(() => true);
+      if (!allowed) { socket.emit('action-feedback', { type: 'friend-request', status: 'rate-limited' }); return; }
 
       const result = await socialStore.createFriendRequest({ requesterId, recipientId });
-
-      if (result.status === 'created') {
-        socket.emit('action-feedback', { type: 'friend-request', status: 'ok' });
-      } else {
-        socket.emit('action-feedback', { type: 'friend-request', status: result.status });
-      }
+      socket.emit('action-feedback', { type: 'friend-request', status: result.status === 'created' ? 'ok' : result.status });
 
       await refreshSocialViews(requesterId);
       if (onlineUsers.has(recipientId)) {
         await refreshSocialViews(recipientId);
         const socketIds = getLiveSocketIds(recipientId);
-        for (const sid of socketIds) {
-          io.to(sid).emit('friend-request-received', { fromUserId: requesterId });
-        }
+        for (const sid of socketIds) { io.to(sid).emit('friend-request-received', { fromUserId: requesterId }); }
       }
     });
 
     socket.on('accept-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       if (!requireAuthenticatedUser(socket, 'friend-request-accept')) return;
       const myUserId = getIdentityId(session);
       const result = await socialStore.acceptFriendRequest({ requestId: data.requestId, userId: myUserId });
-      if (result.status !== 'accepted') {
-        socket.emit('action-feedback', { type: 'friend-request-accept', status: result.status });
-        return;
-      }
-
+      if (result.status !== 'accepted') { socket.emit('action-feedback', { type: 'friend-request-accept', status: result.status }); return; }
       const otherUserId = result.request.requesterId;
       await refreshSocialViews(myUserId);
-      if (onlineUsers.has(otherUserId)) {
-        await refreshSocialViews(otherUserId);
-      }
+      if (onlineUsers.has(otherUserId)) await refreshSocialViews(otherUserId);
       socket.emit('action-feedback', { type: 'friend-request-accept', status: 'ok' });
     });
 
     socket.on('reject-friend-request', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       if (!requireAuthenticatedUser(socket, 'friend-request-reject')) return;
       const myUserId = getIdentityId(session);
       const result = await socialStore.rejectFriendRequest({ requestId: data.requestId, userId: myUserId });
-      if (result.status !== 'rejected') {
-        socket.emit('action-feedback', { type: 'friend-request-reject', status: result.status });
-        return;
-      }
-
+      if (result.status !== 'rejected') { socket.emit('action-feedback', { type: 'friend-request-reject', status: result.status }); return; }
       await refreshSocialViews(myUserId);
       socket.emit('action-feedback', { type: 'friend-request-reject', status: 'ok' });
     });
 
     socket.on('connect-friend', async (data) => {
+      const session = userSessions.get(socket.id);
+      if (!session || session.isGuest) { socket.emit('friend-connect-result', { ok: false, reason: 'unauthorized' }); return; }
       const friendAnonId = sanitizeString(data?.friendAnonId, 128);
       const explicitRequestedMode = parseMode(data?.mode);
-      if (typeof data?.mode !== 'undefined' && !explicitRequestedMode) {
-        socket.emit('friend-connect-result', { ok: false, reason: 'invalid-mode' });
-        return;
-      }
+      if (typeof data?.mode !== 'undefined' && !explicitRequestedMode) { socket.emit('friend-connect-result', { ok: false, reason: 'invalid-mode' }); return; }
       const requestedMode = explicitRequestedMode || null;
-      const session = userSessions.get(socket.id);
-      if (!session || !friendAnonId) return;
       if (!requireAuthenticatedUser(socket, 'friend-connect')) return;
 
       const myAnon = getIdentityId(session);
       const myFriends = await socialStore.listFriends(myAnon);
-      if (!myFriends.some(friend => friend.friendUserId === friendAnonId)) {
-        socket.emit('friend-connect-result', { ok: false, reason: 'not-friends' });
-        return;
-      }
+      if (!myFriends.some(friend => friend.friendUserId === friendAnonId)) { socket.emit('friend-connect-result', { ok: false, reason: 'not-friends' }); return; }
 
       const friendSocketId = getOnlineSocketIdForUser(friendAnonId);
-      if (!friendSocketId) {
-        socket.emit('friend-connect-result', { ok: false, reason: 'offline' });
-        return;
-      }
-
+      if (!friendSocketId) { socket.emit('friend-connect-result', { ok: false, reason: 'offline' }); return; }
       const friendSession = userSessions.get(friendSocketId);
-      if (!friendSession) {
-        socket.emit('friend-connect-result', { ok: false, reason: 'offline' });
-        return;
-      }
-
+      if (!friendSession) { socket.emit('friend-connect-result', { ok: false, reason: 'offline' }); return; }
       const friendSocket = io.sockets.sockets.get(friendSocketId);
-      if (!friendSocket) {
-        socket.emit('friend-connect-result', { ok: false, reason: 'offline' });
-        return;
-      }
+      if (!friendSocket) { socket.emit('friend-connect-result', { ok: false, reason: 'offline' }); return; }
+
       const inviteId = generateId();
-      // The mode is determined exclusively by what the inviter explicitly requested,
-      // falling back to the inviter's own current mode — never the invitee's mode,
-      // which could differ and cause cross-mode connections.
       const resolvedInviteMode = requestedMode || normalizeMode(session.mode) || 'video';
       const timeout = setTimeout(() => {
         pendingFriendInvites.delete(inviteId);
-        queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear expired pending invite');
+        queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear expired invite');
         io.to(socket.id).emit('friend-connect-result', { ok: false, reason: 'expired' });
       }, 30_000);
 
       pendingFriendInvites.set(inviteId, {
-        inviteId,
-        inviterUserId: myAnon,
-        inviterSocketId: socket.id,
-        inviteeUserId: friendAnonId,
-        inviteeSocketId: friendSocketId,
-        mode: resolvedInviteMode,
-        timeout,
+        inviteId, inviterUserId: myAnon, inviterSocketId: socket.id,
+        inviteeUserId: friendAnonId, inviteeSocketId: friendSocketId,
+        mode: resolvedInviteMode, timeout,
       });
-      queueBackground(setPendingInvite(inviteId, pendingFriendInvites.get(inviteId)), '[Redis] Failed to persist pending invite');
+      queueBackground(setPendingInvite(inviteId, pendingFriendInvites.get(inviteId)), '[Redis] Failed to persist invite');
 
       io.to(friendSocketId).emit('friend-connect-invite', {
-        inviteId,
-        fromUserId: myAnon,
-        mode: resolvedInviteMode,
-        profile: buildProfileSnapshot(session),
+        inviteId, fromUserId: myAnon, mode: resolvedInviteMode, profile: buildProfileSnapshot(session),
       });
       socket.emit('friend-connect-result', { ok: true, pending: true, inviteId });
     });
 
     socket.on('respond-friend-connect', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       const inviteId = sanitizeString(data?.inviteId, 128);
       const accepted = !!data?.accepted;
       if (!inviteId || !pendingFriendInvites.has(inviteId)) return;
@@ -1666,39 +1330,25 @@ app.prepare().then(() => {
       const invite = pendingFriendInvites.get(inviteId);
       if (invite.timeout) clearTimeout(invite.timeout);
       pendingFriendInvites.delete(inviteId);
-      queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear pending invite');
+      queueBackground(clearPendingInvite(inviteId), '[Redis] Failed to clear invite');
 
       if (getIdentityId(session) !== invite.inviteeUserId) return;
-
-      if (!accepted) {
-        io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'declined' });
-        return;
-      }
+      if (!accepted) { io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'declined' }); return; }
 
       const inviterSession = userSessions.get(invite.inviterSocketId);
       const inviteeSession = userSessions.get(socket.id);
-      if (!inviterSession || !inviteeSession) {
-        io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'offline' });
-        return;
-      }
+      if (!inviterSession || !inviteeSession) { io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: false, reason: 'offline' }); return; }
+
       const inviteMode = normalizeMode(invite.mode);
-      // Forcibly set both sessions to the agreed invite mode before pairing.
-      // This is the single source of truth — both sides must use the same mode
-      // that the inviter originally requested.
       inviterSession.mode = inviteMode;
       inviteeSession.mode = inviteMode;
-      logDebug('[FriendConnect] Pairing with mode:', inviteMode, invite.inviterSocketId, '<->', socket.id);
 
       await leaveRoom(io.sockets.sockets.get(invite.inviterSocketId));
       await removeFromQueue(invite.inviterSocketId);
       await leaveRoom(socket);
       await removeFromQueue(socket.id);
 
-      const roomId = await emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, {
-        mode: inviteMode,
-        viaFriend: true,
-      });
-
+      const roomId = await emitMatchedPair(invite.inviterSocketId, inviterSession, socket.id, inviteeSession, { mode: inviteMode, viaFriend: true });
       io.to(invite.inviterSocketId).emit('friend-connect-result', { ok: true, roomId });
       socket.emit('friend-connect-result', { ok: true, roomId });
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after friend connect');
@@ -1706,25 +1356,22 @@ app.prepare().then(() => {
 
     socket.on('unfriend', async (data = {}) => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       if (!requireAuthenticatedUser(socket, 'unfriend')) return;
       const myUserId = getIdentityId(session);
       const friendUserId = sanitizeString(data?.friendUserId, 128);
       if (!friendUserId) return;
-
       const result = await socialStore.removeFriendship({ userId: myUserId, friendUserId });
       socket.emit('action-feedback', { type: 'unfriend', status: result.status === 'removed' ? 'ok' : result.status });
       if (result.status === 'removed') {
         await refreshSocialViews(myUserId);
-        if (onlineUsers.has(friendUserId)) {
-          await refreshSocialViews(friendUserId);
-        }
+        if (onlineUsers.has(friendUserId)) await refreshSocialViews(friendUserId);
       }
     });
 
     socket.on('get-friends-status', async () => {
       const session = userSessions.get(socket.id);
-      if (!session) return;
+      if (!session || session.isGuest) return;
       const identityId = getIdentityId(session);
       await refreshSocialViews(identityId);
     });
@@ -1734,8 +1381,7 @@ app.prepare().then(() => {
       if (!session || !session.roomId) return;
       const room = rooms.get(session.roomId);
       if (!room) return;
-      const partnerId = getRoomPartnerId(room, socket.id);
-      io.to(partnerId).emit('typing');
+      io.to(getRoomPartnerId(room, socket.id)).emit('typing');
     });
 
     socket.on('stop-typing', () => {
@@ -1743,26 +1389,21 @@ app.prepare().then(() => {
       if (!session || !session.roomId) return;
       const room = rooms.get(session.roomId);
       if (!room) return;
-      const partnerId = getRoomPartnerId(room, socket.id);
-      io.to(partnerId).emit('stop-typing');
+      io.to(getRoomPartnerId(room, socket.id)).emit('stop-typing');
     });
 
     socket.on('next', async (data = {}) => {
-      logDebug('[Socket] next:', socket.id, data?.reason || 'unknown');
       const session = userSessions.get(socket.id);
       const room = session?.roomId ? rooms.get(session.roomId) : null;
       if (room && data?.reason === 'skip') {
-        const partnerId = getRoomPartnerId(room, socket.id);
-        io.to(partnerId).emit('partner-skipped');
+        io.to(getRoomPartnerId(room, socket.id)).emit('partner-skipped');
       }
       await leaveRoom(socket);
       await removeFromQueue(socket.id);
-
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after next');
     });
 
     socket.on('disconnect', async (reason) => {
-      logDebug('[Socket] Disconnected:', socket.id, reason);
       joinQueueTokens.delete(socket.id);
       const session = userSessions.get(socket.id);
       await leaveRoom(socket);
@@ -1772,32 +1413,22 @@ app.prepare().then(() => {
         if (identityId) {
           removeOnlineSocket(identityId, socket.id);
           clearActiveSocket(identityId, socket.id);
-          notifyFriendsOnlineStatusChanged(identityId);
+          if (!session.isGuest) notifyFriendsOnlineStatusChanged(identityId);
         }
       }
       userSessions.delete(socket.id);
-
+      trackIpConnection(clientIp, -1);
       connectedCount = Math.max(0, connectedCount - 1);
       queueBackground(broadcastStats(), '[Stats] Failed to broadcast after disconnect');
     });
   });
 
   setInterval(() => {
-    try {
-      pruneRuntimeState();
-      logRuntimeStats('interval');
-    } catch (error) {
-      logError('[Runtime] Failed during prune/log cycle:', error?.message || error);
-    }
+    try { pruneRuntimeState(); logRuntimeStats('interval'); }
+    catch (err) { logError('[Runtime] Failed during prune cycle:', err); }
   }, 60_000);
 
   // ── Periodic queue scanner ────────────────────────────────────────────────
-  // Runs every 1.5 s. Picks up any waiting users that were missed due to
-  // simultaneous-join race conditions (both sides' initial findMatch ran
-  // before the other's addToRedisQueue completed in Redis).
-  //
-  // Each mode queue is scanned independently — cross-mode candidates cannot
-  // appear because we read from mode-specific Redis sets.
   setInterval(async () => {
     try {
       for (const scanMode of ['video', 'voice']) {
@@ -1805,62 +1436,41 @@ app.prepare().then(() => {
         const members = await redis.smembers(membersKey).catch(() => []);
         if (!Array.isArray(members) || members.length < 2) continue;
 
-        // Only consider sockets with active in-memory sessions in this mode.
         const candidates = members.filter(sid => {
           const s = userSessions.get(sid);
           return s?.inQueue && !s?.roomId && normalizeMode(s.mode) === scanMode;
         });
         if (candidates.length < 2) continue;
 
-        // Sort by wait time so longest-waiting users are tried first.
         candidates.sort((a, b) => {
           const sA = userSessions.get(a);
           const sB = userSessions.get(b);
           return new Date(sA?.joinedAt || 0).getTime() - new Date(sB?.joinedAt || 0).getTime();
         });
 
-        // Attempt one match per mode per scan cycle (avoids thundering herd).
         for (const socketId of candidates) {
           const session = userSessions.get(socketId);
           if (!session?.inQueue || session?.roomId) continue;
-
-          // Only retry for users who have been waiting > 800 ms.
           const waitMs = session.joinedAt ? Date.now() - new Date(session.joinedAt).getTime() : 0;
           if (waitMs < 800) continue;
 
           const found = await findMatch(socketId, scanMode, session.interests).catch(() => null);
           if (!found) continue;
-
           const foundSession = userSessions.get(found.socketId);
           if (!foundSession) continue;
+          if (normalizeMode(foundSession.mode) !== scanMode) continue;
 
-          // Mode guard — emitMatchedPair also checks, but be explicit here.
-          if (normalizeMode(foundSession.mode) !== scanMode) {
-            logWarn('[Scanner] Mode mismatch after claim — discarding:', found.socketId, normalizeMode(foundSession.mode), '!==', scanMode);
-            continue;
-          }
-
-          const roomId = await emitMatchedPair(found.socketId, foundSession, socketId, session, {
-            mode: scanMode,
-          }).catch(() => null);
-
+          const roomId = await emitMatchedPair(found.socketId, foundSession, socketId, session, { mode: scanMode }).catch(() => null);
           if (roomId) {
-            logDebug('[Scanner] Matched waiting pair:', found.socketId, '<->', socketId, 'mode:', scanMode, 'Room:', roomId);
             queueBackground(broadcastStats(), '[Stats] Failed to broadcast after scanner match');
-            break; // One match per mode per cycle
+            break;
           }
         }
       }
-    } catch (e) {
-      // Never let scanner errors affect the server
-    }
+    } catch {}
   }, 1500);
-
-  // Status endpoint
-  const originalListeners = httpServer.listeners('request').slice();
 
   httpServer.listen(port, hostname, () => {
     logInfo(`> HippiChat ready on http://${hostname}:${port}`);
-    logInfo(`> Socket.io server attached`);
   });
 });
